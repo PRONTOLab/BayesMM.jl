@@ -1,0 +1,4 @@
+name = "BayesMM"
+uuid = "a82ee61c-881e-43d1-a2af-fd7cc495eee4"
+authors = ["wmoses "]
+version = "0.1.0"
