@@ -1,0 +1,112 @@
+#####Output parameters########
+
+output_path = '/data/SIDES/PYSIDES_ORIGINAL_OUTPUTS/'
+run_name = 'pySIDES_from_original'
+
+gen_fits = True
+gen_pickle = True
+
+##############################
+
+
+##### Parameters used to generate SFR properties #####
+
+#Parameters to derive the quenched fraction
+alpha1 =  0.223213
+alpha2 = 0.0912848
+beta1 = 0.0417672
+beta2 = -0.0158969
+gamma = -1.03861
+Mt0 = 10.5296
+qfrac0 = 0.101681
+sigma0 = 0.848799
+
+#Parameters for the evolution of the main sequence fom Schreiber et al.
+m0 = 0.5
+a0 = 1.5
+a1 = 0.3
+m1 = 0.36
+a2 = 2.5
+
+#Main sequence scatter parameters
+sigma_MS = 0.3 #SIDES assume sigma_sb equal sigma_ms
+logBsb = log10(5.3)
+logx0 = log10(0.87)
+
+#Evolution of the fraction of starburst (based on Sargent+12)
+Psb_hz = 0.03
+slope_Psb = -0.015
+z_Psb_knee = 1.
+
+#conversion from Chabrier to Salpeter IMF, used because Schreiber is in Salpeter
+Chab2Salp = 10.0**0.24
+
+#Correction at low-z of the Schreiber relation (see Bethermin+17)
+zmean_lowzcorr = 0.2185
+corr_zmean_lowzcorr = -0.1
+zmax_lowzcorr = 0.5
+
+#Maximum SFR allowed
+SFR_max = 1000.
+
+######################################
+
+
+
+################# Magnification (using Yashar recipe)#################
+path_mu_file = "Psupmu_table_Bethermin17.txt" #Path of the pre-computed probability of magnification
+######################################################################
+
+
+
+################# Parameters to generate the fluxes #################
+
+lambda_list = [24, 70, 100, 160, 250, 350, 500, 850, 1100, 2000]
+Mpc2m = 3.085677581e22
+SFR2LIR = 1.0e10  # Chabrier IMF
+Lsun2W = 3.828e26
+c = 299792458.0  # m/s
+SED_file = 'pysides/SEDfiles/SED_finegrid_dict.p'
+ratios_file = 'pysides/SEDfiles/LFIR_LIR_ratio.p'
+UmeanMSz0 = 5.0
+alphaMS = 0.25
+zlimMS = 4.0
+UmeanSB = 31.0
+sigma_logUmean = 0.2
+
+######################################################################
+
+
+################ Parameters to generate fluxes through filters #######
+
+grid_filter_path = 'pysides/SEDfiles/GRID_FILTER/'
+filter_list = ['MIPS24', 'PACS70', 'PACS100', 'PACS160', 'SPIRE250', 'SPIRE350', 'SPIRE500', 'NIKA1200', 'NIKA2000']
+
+######################################################################
+
+
+############# Parameters to generate the CO lines #######################
+SLED_filename = 'pysides/Daddi15_SLED.txt'
+nu_CO = 115.271208 #GHz
+sigma_dex_CO10 = 0.2 #roughly the value in the litterature
+SLED_SB_Birkin = True
+######################################################################
+
+############# Parameters to generate the CII lines #######################
+nu_CII = 1900.54 #GHz
+sigma_dex_CII = 0.2 # can be calibrated using ALPINE later
+
+generate_de_Looze = True
+generate_Lagache = True
+########################################################################
+
+############# Parameters to generate the CI lines #######################
+nu_CI10 = 492.16 #GHz
+nu_CI21 = 809.34
+a_CI10 = 1.07
+b_CI10 = 0.14
+sigma_CI10 = 0.2
+a_CI21 = 0.63
+b_CI21 = 0.17
+sigma_CI21 = 0.19
+########################################################################
