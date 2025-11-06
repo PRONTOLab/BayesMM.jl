@@ -5,7 +5,7 @@ include("gen_magnification.jl")
 include("gen_fluxes.jl")
 
 
-csv_idl_path = "/Volumes/T7 Shield/SIDES/test/SIDES_Bethermin2017_short.csv"
+csv_idl_path = "data/SIDES_Bethermin2017_short.csv"
 
 params = load_params("SIDES_from_original.par")
 
