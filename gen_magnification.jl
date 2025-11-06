@@ -1,4 +1,4 @@
-using DataFrames
+using CSV, DataFrames
 using Random
 using DelimitedFiles
 using LinearAlgebra: searchsortedlast # Used for efficient index lookup in sorted arrays
@@ -47,8 +47,11 @@ function gen_magnification(cat, params, magnify = true)
     if magnify == true
 
         # Load the magnification grid (np.loadtxt -> DelimitedFiles.readdlm)
-        data = readdlm(params["path_mu_file"], ',')
-        data_mat = convert(Matrix{Float64}, data) # Ensure matrix of Floats
+        #data = readdlm(params["path_mu_file"], ',')
+        #data_mat = parse.(Float64, data) # Ensure matrix of Floats
+        df = CSV.read(params["path_mu_file"], DataFrame, comment="#")
+        data_mat = Matrix{Float64}(df) 
+
 
         # 1. Slice data: Python [0, 1:] -> Julia [1, 2:end]
         z_grid = data_mat[1, 2:end] 

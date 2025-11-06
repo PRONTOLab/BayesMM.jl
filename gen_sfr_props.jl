@@ -10,8 +10,8 @@ function gen_sfr_props(cat, params)
     # --- FIX: Explicitly parse all string numerical parameters immediately ---
     # Assuming all necessary parameters read from the dictionary might be strings:
     python_expr_str = params["Chab2Salp"]
-    julia_expr_str = replace(python_expr_str, "**" => "^")
-    Chab2Salp_num = eval(Meta.parse(julia_expr_str))
+    #julia_expr_str = replace(python_expr_str, "**" => "^")
+    Chab2Salp_num = eval(python_expr_str)
     Mt0 = params["Mt0"] isa AbstractString ? parse(Float64, params["Mt0"]) : params["Mt0"]
     alpha1 = params["alpha1"] isa AbstractString ? parse(Float64, params["alpha1"]) : params["alpha1"]
     alpha2 = params["alpha2"] isa AbstractString ? parse(Float64, params["alpha2"]) : params["alpha2"]

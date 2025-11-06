@@ -1,32 +1,331 @@
-using DataFrames
-using Cosmology 
-using Random   
-using Unitful, UnitfulAstro 
-using PhysicalConstants 
+using Distributed # For parallel processing (replaces Python's multiprocessing)
+using Unitful, UnitfulAstro # For unit handling (replaces astropy.units)
+using PhysicalConstants # For constants (replaces cst.c)
+using Interpolations 
+# Assuming Base.Threads.cpu_count() is available or defined 
+const CPU_COUNT = Sys.CPU_THREADS # Or manually set addprocs(N)
+using Statistics
+using Cosmology
+using ASDF
+using FITSIO
+using HDF5
+
+
+import PhysicalConstants.CODATA2022: c_0 as c # Speed of light constant
 
 # --- Setup Assumptions ---
 # Assuming these are defined globally or within the scope of gen_fluxes.
 const cosmo_model = Cosmology.cosmology() 
 #const cosmo_model = Cosmology.FlatLCDM(h=0.677, OmegaM=0.307, OmegaK=0.0) 
 
-function load_pickle(file_path)
-    # Placeholder for reading pickle files, normally replaced by ASDF2.jl or specific I/O
-    println("WARNING: Using placeholder load_pickle for $file_path")
-    return Dict("grid" => rand(10, 10)) 
+function grouper(N::Int, n::Int)
+    if n <= 0
+        throw(ArgumentError("Number of chunks (n) must be positive"))
+    end
+    N_per_chunk = ceil(Int, N / n)
+    chunks = []
+    start_idx = 1
+    while start_idx <= N
+        end_idx = min(N, start_idx + N_per_chunk - 1)
+        push!(chunks, start_idx:end_idx)
+        start_idx = end_idx + 1
+    end
+    return [chunk for chunk in chunks if !isempty(chunk)]
 end
 
-function gen_Snu_arr(args...)
-    # Placeholder for the array generation function
-    Ngal = length(args[8]) 
-    N_lambda = length(args[6])
-    # Returns a matrix where columns are lambda values (Snu_arr[:, i])
-    return rand(Ngal, N_lambda) 
+# The worker function needs to be available on all processes if pmap is used.
+# If running locally, you might need to wrap the definition in @everywhere
+# or ensure it's defined globally before starting workers.
+
+function worker(ks, lambda_list, stype, Uindex, SED_dict, redshift)
+    # 1. Filter None indices (ks are 1-based indices here)
+    ks = filter(!isnothing, ks) # Literal translation of filtering None [1, 2]
+
+    N_gal = length(ks)
+    N_lambda = length(lambda_list)
+    
+    # Initialize nuLnu (note: starting with dimensionless array, units are added later)
+    nuLnu = zeros(Float64, N_gal, N_lambda) 
+
+    # 2. Calculate lambda_rest (vectorized operations replacing np.newaxis and broadcasting)
+    # np.array(redshift)[ks, np.newaxis] is replaced by extracting the subset and reshaping to N_gal x 1.
+    redshift_subset = redshift[ks]
+    redshift_col = reshape(redshift_subset, N_gal, 1) # Force column vector for broadcasting
+
+    # Apply broadcasting (./, .+) and add units (u"μm")
+    # Python: lambda_list / (1 + np.array(redshift)[ks, np.newaxis]) * u.um
+    # size(lambda_list) = (10, )
+    
+    # size(redshift_col) = (N)
+    # size(lambda_rest) = (N, 10)
+    lambda_rest = ( reshape(lambda_list, 1, 10) ./ (1.0 .+ reshape(redshift_col, length(redshift_col), 1))).*u"μm"
+
+    #println(length(lambda_rest))
+    #println(lambda_rest)
+
+    # 3. Calculate nu_rest_Hz 
+    # Python: (cst.c * u.m/u.s) / lambda_rest.to(u.m)
+    # Use Julia's unit conversion (`|> u"m"`) and constant access (`c`)
+    c_speed = uconvert(u"m/s", c) # Ensure c is in m/s for clean calculation
+    
+    # nu_rest_Hz is calculated as a matrix of Quantities
+    nu_rest_Hz = (c_speed ./ (lambda_rest .|> u"m")) .|> u"Hz"
+
+    # 4. Interpolation Loop (Replacing np.interp with Interpolations.jl)
+    for i in 1:N_gal
+        k = ks[i] # Current 1-based index in the full catalog
+        
+        # NOTE ON INDEXING: Julia is 1-indexed. Uindex is already 1-based and clamped.
+        
+        # Data points for interpolation (X-axis)
+        lambda_interp_x = SED_dict["lambda"]
+        
+        # SED Luminosity array for the specific type/Uindex (Y-axis)
+        # SED_dict[stype[k]][:, Uindex[k]] extracts the data vector
+        sed_data = SED_dict[stype[k]][:, Uindex[k]] 
+        
+        # Create interpolation object (Linear is standard for np.interp; Line() handles extrapolation)
+        # Assuming SED_dict[stype[k]] is Matrix{Float64}, hence sed_data is Vector{Float64}
+        interp_itp = LinearInterpolation(lambda_interp_x, sed_data, extrapolation_bc=Line())
+
+        
+        # Values to interpolate (rest-frame lambdas for this galaxy)
+        lambda_rest_row = ustrip(lambda_rest[i, :])
+
+        
+        # Apply interpolation element-wise (using broadcasting .() on the interpolation object)
+        nuLnu_row = interp_itp.(lambda_rest_row) 
+        
+        # Store result (now just Float64, we will add units back later)
+        nuLnu[i, :] = nuLnu_row
+    end
+    
+
+    # Re-add assumed units for nuLnu output to allow the final division to work
+    nuLnu_quantified = nuLnu .* u"W"
+
+    # 5. Final Calculation and Return Value
+    # Python: (nuLnu / nu_rest_Hz).value
+    # Element-wise division (./). The result is dimensionless because units cancel to Hz^-1
+    # .|> Unitful.NoUnits converts the Quantity to a pure Float (replaces .value in Python)
+    return ustrip(nuLnu_quantified ./ nu_rest_Hz) 
 end
 
-function gen_LFIR_vec(args...)
-    # Placeholder for the LFIR vector generation function
-    return rand(length(args[9])) 
+function gen_Snu_arr(lambda_list, SED_dict, redshift, LIR, Umean, Dlum, issb)
+    N_total = length(redshift) 
+    
+    # 1. Stype Generation (Julia comprehension with ternary operator)
+    stype = [a ? "nuLnu_SB_arr" : "nuLnu_MS_arr" for a in issb]
+
+    # 2. Uindex Calculation (Broadcasted operations replacing NumPy)
+    
+    # SED_dict["Umean"][3] is the first element (replaces Python's  due to 1-indexing)
+    Umean_min = SED_dict[:"Umean"][3] # Accesses the first element (Julia is 1-indexed)
+    dU = SED_dict[:"dU"] 
+    
+    # Uindex calculation: round, division, and subtraction are all broadcasted
+    Uindex = round.((Umean .- Umean_min) ./ dU)
+    
+    # Cast to integer (NumPy astype(int) -> Julia Int.())
+    Uindex = Int.(Uindex)
+    
+    # Clamping (NumPy np.maximum/minimum -> Julia max./min. using 1-based bounds)
+    Umax_index = length(SED_dict["Umean"])
+    
+    # Clamp minimum index to 1 (replaces Python's 0)
+    Uindex = max.(Uindex, 1) 
+    
+    # Clamp maximum index (replaces Python's np.size(arr) - 1)
+    Uindex = min.(Uindex, Umax_index)
+    
+    # 3. Parallel Execution Setup (Replacing Python Pool/map)
+
+    # Prepare input arguments (range(len(redshift)) -> 1:N_total)
+    index_range = 1:N_total
+    
+    # Determine chunk size (// cpu_count() -> div(N_total, CPU_COUNT))
+    chunk_size = div(N_total, CPU_COUNT) 
+    
+    # Create index chunks using the Julia grouper
+    index_chunks = grouper(N_total, CPU_COUNT)
+    #println(size(lambda_list))
+    #println(size(Uindex))
+    #println(size(redshift))
+    
+    Worker_partial(ks) = worker(
+        ks, 
+        lambda_list, 
+        stype, 
+        Uindex, 
+        SED_dict, 
+        redshift
+    )
+    
+    # Execute the worker function in parallel (pmap replaces pool.map)
+    L_nu_over_nu_chunks = pmap(Worker_partial, index_chunks) 
+    
+    # Concatenate the results (np.concatenate -> vcat)
+    # The result is a Matrix{Float64} of dimensionless L_nu/nu values
+    concatenated_worker_output = vcat(L_nu_over_nu_chunks...) 
+
+    # 4. Luminosity Calculation (Lnu)
+
+    # L_sun_W = 3.828e26 * u.W 
+    L_sun_W = 3.828e26 * u"W" 
+
+    # Reshape LIR to a column vector (replaces np.array(LIR)[:, np.newaxis])
+    LIR_col = reshape(LIR, N_total, 1) 
+    
+    # Lnu calculation in W/Hz (Julia units are applied directly)
+    Lnu = L_sun_W .* LIR_col .* concatenated_worker_output ./ u"Hz"
+
+    # 5. Flux Density Calculation (Snu_arr)
+
+    # Numerator: Lnu * ( 1 + redshift) * (1/ (4 * pi))
+    redshift_col = reshape(redshift, N_total, 1)
+    Numerator = Lnu .* (1.0 .+ redshift_col) .* (1.0 / (pi * 4.0))
+
+    # Denominator: ((np.asarray(Dlum) * u.Mpc).to(u.m)) ** 2
+    # Dlum is assumed to be a vector of Quantity{Float64, L, ...} (e.g., Mpc units)
+    
+    # Convert Dlum to meters (using .|> u"m") and square it (using .^ 2)
+    Dlum_m_squared = (Dlum .|> u"m") .^ 2
+    Denominator = reshape(Dlum_m_squared, N_total, 1) # Reshape for division broadcasting
+
+    # Final Flux Density Calculation
+    # Snu_arr = ( Numerator / Denominator ).to(u.Jy)
+    Snu_arr = (Numerator ./ Denominator) .|> u"Jy" # Element-wise division and conversion to Jansky
+
+    return Snu_arr
 end
+
+
+
+function gen_LFIR_vec(LIR_LFIR_ratio_dict, redshift, LIR, Umean, issb)
+    # 1. Initialize LFIR array (using zeros_like is equivalent to zeros(size(redshift)))
+    # We assume redshift is a 1D vector of numerical type (e.g., Float64)
+    LFIR = zeros(eltype(redshift), size(redshift)) 
+
+    # 2. Identify Selection Indices (replacing np.where and == True/False)
+    
+    # In Julia, issb is a Vector{Bool}. We use findall for 1-based indices.
+    # Note: issb == true is typically written simply as `issb` in Julia.
+    selSB = findall(issb)      # Indices where issb is true (Starburst)
+    selMS = findall(.!issb)    # Indices where issb is false (Main Sequence)
+    
+    # 3. Uindex Calculation (Vectorized operations replacing np.round, np.astype)
+
+    # Note: Array indexing in Julia starts at 1, so the first element is [6], not  [2].
+    # We assume LIR_LFIR_ratio_dict["Umean"] is an array/vector.
+    Umean_min = LIR_LFIR_ratio_dict[:"Umean"][6]#[6] # Accessing the first element (index 1)
+    
+    # Python: Uindex = np.round((Umean - LIR_LFIR_ratio_dict["Umean"]) / LIR_LFIR_ratio_dict["dU"])
+    # Julia uses broadcasting (dot notation) for element-wise operations [7].
+    Uindex = round.((Umean .- Umean_min) ./ LIR_LFIR_ratio_dict["dU"])
+    
+    # Python: Uindex.astype(int) is replaced by broadcasting Int.()
+    Uindex = Int.(Uindex) 
+
+    # 4. Clamping Indices (Replacing np.maximum, np.minimum, and array size calculation)
+
+    # Maximum valid index in Julia is length(array) (replaces Python's np.size(arr) - 1) [8].
+    Umax_index = length(LIR_LFIR_ratio_dict["Umean"]) 
+    
+    # Clamp minimum index to 1 (replaces Python's 0)
+    Uindex = max.(Uindex, 1) 
+    
+    # Clamp maximum index
+    Uindex = min.(Uindex, Umax_index)
+    
+    # 5. Luminosity Calculation (Replacing array indexing and multiplication)
+    
+    # Python slices selectSB (the tuple containing the index array) are not needed in Julia.
+    # We use the index vectors selSB and selMS to access and update elements simultaneously.
+    
+    # Starburst (SB) calculation: LFIR[SB indices] = LIR[SB indices] * ratio[Uindex[SB indices]]
+    @views LFIR[selSB] = LIR[selSB] .* LIR_LFIR_ratio_dict["LFIR_LIR_ratio_SB"][Uindex[selSB]]
+    
+    # Main Sequence (MS) calculation: LFIR[MS indices] = LIR[MS indices] * ratio[Uindex[MS indices]]
+    @views LFIR[selMS] = LIR[selMS] .* LIR_LFIR_ratio_dict["LFIR_LIR_ratio_MS"][Uindex[selMS]]
+
+    return LFIR
+end
+
+
+function load_sed_pickle_equivalent(file_path::String)
+    
+    println("Loading data from hdf5 file: $file_path")
+
+    # 2. Define the file path
+    hdf5_file_path = file_path
+    
+    # 3. Create a Julia dictionary to hold the data
+    SEDData = Dict{String, Any}()
+    
+    # 4. Read the HDF5 file and populate the dictionary
+    try
+        h5open(hdf5_file_path, "r") do f
+            for key in keys(f)
+                # read() loads the HDF5 dataset into memory (e.g., as a Julia Array)
+                SEDData[key] = read(f[key])
+            end
+        end
+    
+        println("Successfully loaded SEDData from HDF5!")
+        println("Type: ", typeof(SEDData))
+        #println("Data: ", SEDData)
+    catch e
+        println("Error loading HDF5 file: ", e)
+
+    end
+
+    return SEDData
+
+end
+
+
+function add_fluxes(cat::DataFrame, params::Dict, new_lambda::AbstractVector)
+    
+    tstart = time()
+
+    SED_dict = load_sed_pickle_equivalent(params["SED_file"])
+    
+    println("Add new monochromatic fluxes...")
+
+    # Calculate Snu_arr. Column access uses dot syntax or bracket indexing (cat.redshift) 
+    # and element-wise multiplication requires the dot operator (.*) [3, 4].
+    Snu_arr = gen_Snu_arr(
+        new_lambda, 
+        SED_dict, 
+        cat.redshift, 
+        cat.mu .* cat.LIR, 
+        cat.Umean, 
+        cat.Dlum, 
+        cat.issb
+    )
+
+    # Since the original Python uses `cat = cat.assign(...)` which returns a new DataFrame, 
+    # we copy the input to maintain non-mutating semantics [5].
+    new_cat = copy(cat) 
+
+    # Iterate over the indices of new_lambda. Julia uses 1-based indexing [6, 7].
+    for i in eachindex(new_lambda) 
+        # Dynamically generate column name as a Symbol (idiomatic for DataFrame column names) [8].
+        col_name = Symbol("S$(new_lambda[i])") 
+        
+        # Assign the calculated flux array (Snu_arr column i) to the new DataFrame.
+        # The `df[!, :column] = data` syntax is used for efficient column assignment in DataFrames.jl [9].
+        new_cat[!, col_name] = Snu_arr[:, i]
+    end
+
+    tstop = time()
+
+    # Use string interpolation for printing variables within strings [10].
+    println("New fluxes of $(length(new_cat)) galaxies generated in $(tstop - tstart)s")
+
+    return new_cat
+end
+
 
 """
 Translated function to generate SED properties and fluxes.
@@ -53,7 +352,7 @@ function gen_fluxes(cat::DataFrame, params::Dict)
         
         redshifts = cat[!, :redshift]
         # Use vector comprehension for cosmological calculation
-        Dlum_values = [luminosity_distance(cosmo_model, z) for z in redshifts] 
+        Dlum_values = [Cosmology.luminosity_dist(cosmo_model, z) for z in redshifts] 
         
         cat[!, :Dlum] = Dlum_values
     end
@@ -90,14 +389,15 @@ function gen_fluxes(cat::DataFrame, params::Dict)
 
     # --- 4. Load Grids (Serialization) ---
     println("Load SED and LIR grids...")
-    SED_dict = load_pickle(params["SED_file"])
-    LIR_LFIR_ratio_dict = load_pickle(params["ratios_file"])
+    SED_dict = load_sed_pickle_equivalent(params["SED_file"])
+    LIR_LFIR_ratio_dict = load_sed_pickle_equivalent(params["ratios_file"])
 
     # --- 5. Generate LIR ---
     println("Generate LIR...")
     cat[!, :LIR] = params["SFR2LIR"] .* cat[!, :SFR]
-
+    println(keys(SED_dict))
     # --- 6. Generate Flux Array (Assumed helper function call) ---
+    println("Generate Flux Array ...")
     Snu_arr = gen_Snu_arr(
         params["lambda_list"], 
         SED_dict, 
@@ -107,15 +407,15 @@ function gen_fluxes(cat::DataFrame, params::Dict)
         cat[!, :Dlum], 
         cat[!, :issb]
     )
-
-
-    # --- FINAL SECTION TRANSLATION ---
+    #println(Snu_arr)
     # Python: for i in range(0,len(params['lambda_list'])):
     lambda_list = params["lambda_list"]
     
+    lambda_list_row = reshape(lambda_list, 1, length(lambda_list))
+
     # Iterate using Julia's 1-based indexing [1]
-    for i in 1:length(lambda_list) 
-        lambda_val = lambda_list[i]
+    for i in 1:length(lambda_list_row) 
+        lambda_val = lambda_list_row[i]
 
         # Dynamic column naming and assignment
         # Python: kwargs = {'S{:d}'.format(...) : Snu_arr[:,i]}

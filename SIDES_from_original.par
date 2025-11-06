@@ -1,10 +1,10 @@
 #####Output parameters########
 
-output_path = '/data/SIDES/PYSIDES_ORIGINAL_OUTPUTS/'
-run_name = 'pySIDES_from_original'
+output_path = "./data/SIDES/PYSIDES_ORIGINAL_OUTPUTS/"
+run_name = "pySIDES_from_original"
 
-gen_fits = True
-gen_pickle = True
+gen_fits = true
+gen_pickle = true
 
 ##############################
 
@@ -39,7 +39,7 @@ slope_Psb = -0.015
 z_Psb_knee = 1.
 
 #conversion from Chabrier to Salpeter IMF, used because Schreiber is in Salpeter
-Chab2Salp = 10.0**0.24
+Chab2Salp = 10.0^0.24
 
 #Correction at low-z of the Schreiber relation (see Bethermin+17)
 zmean_lowzcorr = 0.2185
@@ -54,7 +54,7 @@ SFR_max = 1000.
 
 
 ################# Magnification (using Yashar recipe)#################
-path_mu_file = "Psupmu_table_Bethermin17.txt" #Path of the pre-computed probability of magnification
+path_mu_file = "./Psupmu_table_Bethermin17.txt" #Path of the pre-computed probability of magnification
 ######################################################################
 
 
@@ -66,8 +66,8 @@ Mpc2m = 3.085677581e22
 SFR2LIR = 1.0e10  # Chabrier IMF
 Lsun2W = 3.828e26
 c = 299792458.0  # m/s
-SED_file = 'pysides/SEDfiles/SED_finegrid_dict.p'
-ratios_file = 'pysides/SEDfiles/LFIR_LIR_ratio.p'
+SED_file = "./SED_finegrid_dict.h5"
+ratios_file = "./LFIR_LIR_ratio.h5"
 UmeanMSz0 = 5.0
 alphaMS = 0.25
 zlimMS = 4.0
@@ -79,25 +79,25 @@ sigma_logUmean = 0.2
 
 ################ Parameters to generate fluxes through filters #######
 
-grid_filter_path = 'pysides/SEDfiles/GRID_FILTER/'
-filter_list = ['MIPS24', 'PACS70', 'PACS100', 'PACS160', 'SPIRE250', 'SPIRE350', 'SPIRE500', 'NIKA1200', 'NIKA2000']
+grid_filter_path = "./"
+filter_list = ["MIPS24", "PACS70", "PACS100", "PACS160", "SPIRE250", "SPIRE350", "SPIRE500", "NIKA1200", "NIKA2000"]
 
 ######################################################################
 
 
 ############# Parameters to generate the CO lines #######################
-SLED_filename = 'pysides/Daddi15_SLED.txt'
+SLED_filename = "./Daddi15_SLED.txt"
 nu_CO = 115.271208 #GHz
 sigma_dex_CO10 = 0.2 #roughly the value in the litterature
-SLED_SB_Birkin = True
+SLED_SB_Birkin = true
 ######################################################################
 
 ############# Parameters to generate the CII lines #######################
 nu_CII = 1900.54 #GHz
 sigma_dex_CII = 0.2 # can be calibrated using ALPINE later
 
-generate_de_Looze = True
-generate_Lagache = True
+generate_de_Looze = true
+generate_Lagache = true
 ########################################################################
 
 ############# Parameters to generate the CI lines #######################
