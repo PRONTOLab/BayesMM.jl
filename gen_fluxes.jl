@@ -6,7 +6,7 @@ using Interpolations
 const CPU_COUNT = Sys.CPU_THREADS # Or manually set addprocs(N)
 using Statistics
 using Cosmology
-using ASDF
+#using ASDF
 using FITSIO
 using HDF5
 
