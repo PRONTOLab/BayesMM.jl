@@ -14,14 +14,15 @@ cat = load_sides_csv(csv_idl_path)
 function process(cat, params)
 	cat = gen_sfr_props(cat, params)
 
-	cat = gen_magnification(cat, params)
+	# cat = gen_magnification(cat, params)
 
-	cat = gen_fluxes(cat, params)
+	# cat = gen_fluxes(cat, params)
 	return cat
 end
 
 using Reactant
+Reactant.set_default_backend("cpu")
 params = Reactant.to_rarray(params)
-cat = Reactant.to_rarray(cat)
-cat2 = @jit process(cat, params)
+cat_nt = Tables.columntable(cat)
+cat2 = @jit process(cat_nt, params)
 

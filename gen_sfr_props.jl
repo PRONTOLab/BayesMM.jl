@@ -59,6 +59,7 @@ function gen_sfr_props(cat, params)
 
     qflag = Xuni .> Prob_SF 
     
+    # Have to change
     cat[!, :qflag] = qflag
 
     # Generate SFR for non-quenched objects
