@@ -1,7 +1,63 @@
 using DataFrames
 using Random
-using SpecialFunctions: erf 
+using SpecialFunctions: erf
 using Base: parse # Ensure parse is available
+
+function parse_sfr_params(params)
+    _p(k) =
+        let v = params[k]
+            v isa AbstractString ? parse(Float64, v) : Float64(v)
+        end
+    return (
+        Chab2Salp_num=eval(params["Chab2Salp"]),
+        Mt0=_p("Mt0"), alpha1=_p("alpha1"), alpha2=_p("alpha2"),
+        sigma0=_p("sigma0"), beta1=_p("beta1"), beta2=_p("beta2"),
+        qfrac0=_p("qfrac0"), gamma=_p("gamma"),
+        m1=_p("m1"), a2=_p("a2"), m0=_p("m0"), a0=_p("a0"), a1=_p("a1"),
+        corr_zmean_lowzcorr=_p("corr_zmean_lowzcorr"),
+        zmax_lowzcorr=_p("zmax_lowzcorr"), zmean_lowzcorr=_p("zmean_lowzcorr"),
+        Psb_hz=_p("Psb_hz"), slope_Psb=_p("slope_Psb"), z_Psb_knee=_p("z_Psb_knee"),
+        sigma_MS=_p("sigma_MS"), logx0=_p("logx0"), logBsb=_p("logBsb"),
+        SFR_max=_p("SFR_max"),
+    )
+end
+
+function gen_sfr_props_traced(cat, p)
+    (; Chab2Salp_num, Mt0, alpha1, alpha2, sigma0, beta1, beta2, qfrac0, gamma,
+        m1, a2, m0, a0, a1, corr_zmean_lowzcorr, zmax_lowzcorr, zmean_lowzcorr,
+        Psb_hz, slope_Psb, z_Psb_knee, sigma_MS, logx0, logBsb, SFR_max) = p
+
+    Ngal = length(cat.redshift)
+
+    Mtz = Mt0 .+ alpha1 .* cat.redshift .+ alpha2 .* cat.redshift .^ 2
+    sigmaz = sigma0 .+ beta1 .* cat.redshift .+ beta2 .* cat.redshift .^ 2
+    qfrac0z = qfrac0 .* (1.0 .+ cat.redshift) .^ gamma
+    Prob_SF = (1.0 .- qfrac0z) .* 0.5 .* (1.0 .- erf.((log10.(cat.Mstar) .- Mtz) ./ sigmaz))
+    Xuni = rand(Ngal)
+    qflag = Xuni .> Prob_SF
+
+    m_all = log10.(cat.Mstar .* Chab2Salp_num ./ 1.0e9)
+    r_all = log10.(1.0 .+ cat.redshift)
+    expr_all = max.(m_all .- m1 .- a2 .* r_all, 0.0)
+    logSFRms_all = m_all .- m0 .+ a0 .* r_all .- a1 .* expr_all .^ 2 .- log10(Chab2Salp_num)
+    logSFRms_all = logSFRms_all .+ corr_zmean_lowzcorr .* (zmax_lowzcorr .- min.(cat.redshift, zmax_lowzcorr)) ./ (zmax_lowzcorr - zmean_lowzcorr)
+
+    Psb_all = Psb_hz .+ slope_Psb .* (z_Psb_knee .- min.(cat.redshift, z_Psb_knee))
+    Xuni_sb = rand(Ngal)
+    issb_all = Xuni_sb .< Psb_all
+
+    noise_all = randn(Ngal)
+    issb_term_all = issb_all .* (logBsb - logx0)
+    SFR_all = 10.0 .^ (logSFRms_all .+ sigma_MS .* noise_all .+ logx0 .+ issb_term_all)
+
+    SFR_all = min.(SFR_all, SFR_max)
+
+    mask_SF = .!qflag
+    SFR_final = ifelse.(mask_SF, SFR_all, zero(eltype(SFR_all)))
+    issb_final = ifelse.(mask_SF, issb_all, false)
+
+    return (qflag, SFR_final, issb_final)
+end
 
 function gen_sfr_props(cat, params)
 
@@ -46,7 +102,7 @@ function gen_sfr_props(cat, params)
     println("Generate the star-formation properties...")
     println("Draw quenched galaxies...")
 
-    Ngal = size(cat, 1) 
+    Ngal = length(cat.redshift)
 
     # Draw quenched galaxies using parsed parameters
     Mtz = Mt0 .+ alpha1 .* cat.redshift .+ alpha2 .* cat.redshift.^2 
