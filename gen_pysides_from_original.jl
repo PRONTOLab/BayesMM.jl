@@ -23,8 +23,11 @@ function gen_sfr_props2(cat, p)
         m1, a2, m0, a0, a1, corr_zmean_lowzcorr, zmax_lowzcorr, zmean_lowzcorr,
         Psb_hz, slope_Psb, z_Psb_knee, sigma_MS, logx0, logBsb, SFR_max) = p
 
+    println("Generate the star-formation properties...")
+    println("Draw quenched galaxies...")
     Ngal = length(cat.redshift)
 
+    # Draw quenched galaxies using parsed parameters
     Mtz = Mt0 .+ alpha1 .* cat.redshift .+ alpha2 .* cat.redshift .^ 2
     sigmaz = sigma0 .+ beta1 .* cat.redshift .+ beta2 .* cat.redshift .^ 2
     qfrac0z = qfrac0 .* (1.0 .+ cat.redshift) .^ gamma
@@ -32,23 +35,37 @@ function gen_sfr_props2(cat, p)
     Xuni = rand(Ngal)
     qflag = Xuni .> Prob_SF
 
+
     m_all = log10.(cat.Mstar .* Chab2Salp_num ./ 1.0e9)
     r_all = log10.(1.0 .+ cat.redshift)
     expr_all = max.(m_all .- m1 .- a2 .* r_all, 0.0)
+    # Use parsed parameters here
     logSFRms_all = m_all .- m0 .+ a0 .* r_all .- a1 .* expr_all .^ 2 .- log10(Chab2Salp_num)
+    # Crucial Fix applies here, ensuring zmax/zmean are numbers
     logSFRms_all = logSFRms_all .+ corr_zmean_lowzcorr .* (zmax_lowzcorr .- min.(cat.redshift, zmax_lowzcorr)) ./ (zmax_lowzcorr - zmean_lowzcorr)
 
+    # Use parsed parameters here
     Psb_all = Psb_hz .+ slope_Psb .* (z_Psb_knee .- min.(cat.redshift, z_Psb_knee))
     Xuni_sb = rand(Ngal)
     issb_all = Xuni_sb .< Psb_all
 
     noise_all = randn(Ngal)
+
+    # Use parsed parameters here
     issb_term_all = issb_all .* (logBsb - logx0)
     SFR_all = 10.0 .^ (logSFRms_all .+ sigma_MS .* noise_all .+ logx0 .+ issb_term_all)
 
-    SFR_all = min.(SFR_all, SFR_max)
-
     mask_SF = .!qflag
+    println("Deal with SFR drawn initially above the SFR limit...")
+    too_high = (SFR_all .> SFR_max) .& mask_SF
+    
+    @trace track_numbers=false while any(too_high)
+        redraw_noise = randn(Ngal)
+        redraw = 10.0 .^ (logSFRms_all .+ sigma_MS .* redraw_noise .+ logx0 .+ issb_term_all)
+        SFR_all = ifelse.(too_high, redraw, SFR_all)
+        too_high = (SFR_all .> SFR_max) .& mask_SF
+    end
+
     SFR_final = ifelse.(mask_SF, SFR_all, zero(eltype(SFR_all)))
     issb_final = ifelse.(mask_SF, issb_all, false)
 
