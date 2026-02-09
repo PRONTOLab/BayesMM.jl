@@ -91,6 +91,9 @@ function process!(cat,sfr_params, params)
 	# cat = gen_fluxes(cat, params)
 end
 
+# Predeclare output columns so compiled code does not change table schema.
+cat_og[!, :SFR] = zeros(Float64, nrow(cat_og))
+cat_og[!, :issb] = falses(nrow(cat_og))
 cat_ra = Reactant.to_rarray(cat_og)
 cat_f = @jit process!(cat_ra, sfr_params, params)
 println("\n=== Finished Computations ===")
