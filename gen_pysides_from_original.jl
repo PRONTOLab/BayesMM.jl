@@ -2,6 +2,7 @@ ENV["JULIA_DEBUG"] = "Reactant,Reactant_jll"
 using Reactant
 using DataFrames
 using Random
+using CSV
 Reactant.set_default_backend("cpu")
 Reactant.MLIR.IR.DUMP_MLIR_ALWAYS[] = false
 const BENCHMARK_SEED = 1234
@@ -14,9 +15,9 @@ include("gen_magnification.jl")
 include("gen_fluxes.jl")
 
 ## Initialize stuff
-csv_idl_path = "data/SIDES_Bethermin2017_short.csv"
+csv_idl_path = "data/SIDES_Bethermin2017_short2.csv" #use truncated csv for
 params = load_params("SIDES_from_original.par")
-cat_ra = load_sides_csv(csv_idl_path)
+cat_og = load_sides_csv(csv_idl_path)
 sfr_params = parse_sfr_params(params)
 
 function gen_sfr_props2(cat::DataFrame, p::NamedTuple)
@@ -59,8 +60,8 @@ function gen_sfr_props2(cat::DataFrame, p::NamedTuple)
     
     println("Deal with SFR drawn initially above the SFR limit...")
     too_high_mask = (SFR_all .> SFR_max) .& mask_SF
-
-    # Redraw only the initially invalid SF entries, one index at a time.
+    
+    # Redraw only the initially invalid SF entries, until they are valid.
     @trace track_numbers=false for i in 1:Ngal
         needs_redraw_i = @allowscalar too_high_mask[i]
         @trace track_numbers=false while needs_redraw_i
@@ -73,29 +74,25 @@ function gen_sfr_props2(cat::DataFrame, p::NamedTuple)
             needs_redraw_i = redraw_i > SFR_max
         end
     end
-    
-    println("Finished loop computation")
     SFR_final = ifelse.(mask_SF, SFR_all, zero(eltype(SFR_all)))
     issb_final = ifelse.(mask_SF, issb_all, false)
-    
-    return (qflag, SFR_final, issb_final)
+    println("Typeof SFR_final is: ", typeof(SFR_final))
+    println("Typeof issb_final is: ",typeof(issb_final))
+    cat[!,:SFR] = SFR_final
+    cat[!,:issb] = issb_final
+    return cat
+    # return (qflag, SFR_final, issb_final)
 end
 
-function process(cat)
-    return gen_sfr_props2(cat, sfr_params)
-
+function process!(cat,sfr_params, params)
+    cat = gen_sfr_props2(cat, sfr_params)
 	# cat = gen_magnification(cat, params)
+    return cat
 	# cat = gen_fluxes(cat, params)
 end
 
-# cat_ra = DataFrame(
-#     redshift = Reactant.ConcreteRArray(cat.redshift),
-#     ra = Reactant.ConcreteRArray(cat.ra),
-#     dec = Reactant.ConcreteRArray(cat.dec),
-#     Mhalo = Reactant.ConcreteRArray(cat.Mhalo),
-#     Mstar = Reactant.ConcreteRArray(cat.Mstar),
-# )
-(qflag, SFR, issb) = @jit process(cat_ra)
+cat_ra = Reactant.to_rarray(cat_og)
+cat_f = @jit process!(cat_ra, sfr_params, params)
 println("\n=== Finished Computations ===")
 
 # println("qflag: ", typeof(qflag), " size=", size(qflag))
