@@ -80,3 +80,22 @@ function gen_magnification(cat, mag_params, magnify = true)
     
     return cat
 end
+
+
+# Moving magnification grid processing here
+function process_magnification_grid(path_mu_file)
+    # Load the magnification grid (np.loadtxt -> DelimitedFiles.readdlm)
+    #data = readdlm(params["path_mu_file"], ',')
+    #data_mat = parse.(Float64, data) # Ensure matrix of Floats
+    df = CSV.read(path_mu_file, DataFrame, comment="#")
+    data_mat = Matrix{Float64}(df)
+
+    # 1. Slice data: Python [0, 1:] -> Julia [1, 2:end]
+    z_grid = data_mat[1, 2:end]
+    
+    # 2. Reverse (flip): Python axis=0 -> Julia dims=1 (rows)
+    mu_grid = reverse(data_mat[2:end, 1])
+    Psupmu = reverse(data_mat[2:end, 2:end]; dims=1)
+
+    return (z_grid, mu_grid, Psupmu)
+end

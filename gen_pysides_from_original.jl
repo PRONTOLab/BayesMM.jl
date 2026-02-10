@@ -2,6 +2,8 @@ ENV["JULIA_DEBUG"] = "Reactant,Reactant_jll"
 using Reactant
 using DataFrames
 using Random
+using Cosmology
+const cosmo_model = Cosmology.cosmology() 
 using CSV
 Reactant.set_default_backend("cpu")
 Reactant.MLIR.IR.DUMP_MLIR_ALWAYS[] = false
@@ -18,7 +20,6 @@ include("gen_fluxes.jl")
 csv_idl_path = "data/SIDES_Bethermin2017_short2.csv" #use truncated csv for
 params = load_params("SIDES_from_original.par")
 cat_og = load_sides_csv(csv_idl_path)
-sfr_params = parse_sfr_params(params)
 
 function gen_sfr_props2(cat::DataFrame, p::NamedTuple)
     # Read parameters
@@ -84,40 +85,44 @@ function gen_sfr_props2(cat::DataFrame, p::NamedTuple)
     # return (qflag, SFR_final, issb_final)
 end
 
-function process!(cat,sfr_params, mag_params)
+function process!(cat,
+                  sfr_params,
+                  mag_params,
+                  flux_params)
     cat = gen_sfr_props2(cat, sfr_params)
 	cat = gen_magnification(cat, mag_params)
+    cat = gen_fluxes(cat, flux_params)
     return cat
-	# cat = gen_fluxes(cat, params)
 end
 
-# Moving magnification grid processing here
-function process_magnification_grid(path_mu_file)
-    # Load the magnification grid (np.loadtxt -> DelimitedFiles.readdlm)
-    #data = readdlm(params["path_mu_file"], ',')
-    #data_mat = parse.(Float64, data) # Ensure matrix of Floats
-    df = CSV.read(path_mu_file, DataFrame, comment="#")
-    data_mat = Matrix{Float64}(df)
-
-    # 1. Slice data: Python [0, 1:] -> Julia [1, 2:end]
-    z_grid = data_mat[1, 2:end]
-    
-    # 2. Reverse (flip): Python axis=0 -> Julia dims=1 (rows)
-    mu_grid = reverse(data_mat[2:end, 1])
-    Psupmu = reverse(data_mat[2:end, 2:end]; dims=1)
-
-    return (z_grid, mu_grid, Psupmu)
-end
-
-# Preprocess data 
+# SFR props params
+sfr_params = parse_sfr_params(params)
+# Magnification params
 mag_params = process_magnification_grid(params["path_mu_file"])
 mag_r_params = Reactant.to_rarray(mag_params)
+# Flux params
+flux_params = parse_flux_params(cosmo_model,params)
+flux_r_params = Reactant.to_rarray(flux_params)
+
+#Dataframe params
+#sfr
 cat_og[!, :SFR] = zeros(Float64, nrow(cat_og))
 cat_og[!, :issb] = falses(nrow(cat_og))
+#magnification
 cat_og[!, :mu] = ones(Float64, nrow(cat_og))
+# fluxes
+cat_og[!, :Dlum] = [Cosmology.luminosity_dist(cosmo_model, z) for z in cat_og.redshift] 
+cat_og[!, :Umean] = zeros(Float64, nrow(cat_og))
+cat_og[!, :LIR] = zeros(Float64, nrow(cat_og))
+cat_og[!, :LFIR] = zeros(Float64,nrow(cat_og))
+for v in flux_params.lambda_list
+    colname = "S$(v)"
+    colsym = Symbol(colname)
+    cat_og[!, colsym] = zeros(Float64,nrow(cat_og))
+end
 cat_ra = Reactant.to_rarray(cat_og)
 
-cat_f = @jit process!(cat_ra, sfr_params, mag_r_params)
+cat_f = @jit process!(cat_ra, sfr_params, mag_r_params, flux_r_params)
 println("\n=== Finished Computations ===")
 
 # println("qflag: ", typeof(qflag), " size=", size(qflag))

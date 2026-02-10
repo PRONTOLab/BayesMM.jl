@@ -9,13 +9,12 @@ using Cosmology
 #using ASDF
 using FITSIO
 using HDF5
-
+using Reactant
 
 import PhysicalConstants.CODATA2022: c_0 as c # Speed of light constant
 
 # --- Setup Assumptions ---
 # Assuming these are defined globally or within the scope of gen_fluxes.
-const cosmo_model = Cosmology.cosmology() 
 #const cosmo_model = Cosmology.FlatLCDM(h=0.677, OmegaM=0.307, OmegaK=0.0) 
 
 function grouper(N::Int, n::Int)
@@ -37,7 +36,7 @@ end
 # If running locally, you might need to wrap the definition in @everywhere
 # or ensure it's defined globally before starting workers.
 
-function worker(ks, lambda_list, stype, Uindex, SED_dict, redshift)
+function worker(ks, lambda_list, issb, Uindex, sed_tables, redshift)
     # 1. Filter None indices (ks are 1-based indices here)
     ks = filter(!isnothing, ks) # Literal translation of filtering None [1, 2]
 
@@ -78,11 +77,11 @@ function worker(ks, lambda_list, stype, Uindex, SED_dict, redshift)
         # NOTE ON INDEXING: Julia is 1-indexed. Uindex is already 1-based and clamped.
         
         # Data points for interpolation (X-axis)
-        lambda_interp_x = SED_dict["lambda"]
-        
-        # SED Luminosity array for the specific type/Uindex (Y-axis)
-        # SED_dict[stype[k]][:, Uindex[k]] extracts the data vector
-        sed_data = SED_dict[stype[k]][:, Uindex[k]] 
+        lambda_interp_x = sed_tables.lambda
+
+        # Pick the MS/SB table directly from the pre-extracted SED arrays.
+        sed_table = ifelse(issb[k], sed_tables.nuLnu_SB, sed_tables.nuLnu_MS)
+        sed_data = sed_table[:, Uindex[k]]
         
         # Create interpolation object (Linear is standard for np.interp; Line() handles extrapolation)
         # Assuming SED_dict[stype[k]] is Matrix{Float64}, hence sed_data is Vector{Float64}
@@ -111,17 +110,14 @@ function worker(ks, lambda_list, stype, Uindex, SED_dict, redshift)
     return ustrip(nuLnu_quantified ./ nu_rest_Hz) 
 end
 
-function gen_Snu_arr(lambda_list, SED_dict, redshift, LIR, Umean, Dlum, issb)
+function gen_Snu_arr(lambda_list, sed_tables, redshift, LIR, Umean, Dlum, issb)
     N_total = length(redshift) 
-    
-    # 1. Stype Generation (Julia comprehension with ternary operator)
-    stype = [a ? "nuLnu_SB_arr" : "nuLnu_MS_arr" for a in issb]
 
     # 2. Uindex Calculation (Broadcasted operations replacing NumPy)
     
-    # SED_dict["Umean"][3] is the first element (replaces Python's  due to 1-indexing)
-    Umean_min = SED_dict[:"Umean"][3] # Accesses the first element (Julia is 1-indexed)
-    dU = SED_dict[:"dU"] 
+    # sed_tables.Umean[3] is the first element (replaces Python's  due to 1-indexing)
+    Umean_min = sed_tables.Umean[3] # Accesses the first element (Julia is 1-indexed)
+    dU = sed_tables.dU
     
     # Uindex calculation: round, division, and subtraction are all broadcasted
     Uindex = round.((Umean .- Umean_min) ./ dU)
@@ -130,7 +126,7 @@ function gen_Snu_arr(lambda_list, SED_dict, redshift, LIR, Umean, Dlum, issb)
     Uindex = Int.(Uindex)
     
     # Clamping (NumPy np.maximum/minimum -> Julia max./min. using 1-based bounds)
-    Umax_index = length(SED_dict["Umean"])
+    Umax_index = length(sed_tables.Umean)
     
     # Clamp minimum index to 1 (replaces Python's 0)
     Uindex = max.(Uindex, 1) 
@@ -155,9 +151,9 @@ function gen_Snu_arr(lambda_list, SED_dict, redshift, LIR, Umean, Dlum, issb)
     Worker_partial(ks) = worker(
         ks, 
         lambda_list, 
-        stype, 
+        issb, 
         Uindex, 
-        SED_dict, 
+        sed_tables, 
         redshift
     )
     
@@ -284,78 +280,112 @@ function load_sed_pickle_equivalent(file_path::String)
 end
 
 
-function add_fluxes(cat::DataFrame, params::Dict, new_lambda::AbstractVector)
-    
-    tstart = time()
+# function add_fluxes(cat::DataFrame, params::Dict, new_lambda::AbstractVector)
+#
+#     tstart = time()
+#
+#     SED_dict = load_sed_pickle_equivalent(params["SED_file"])
+#
+#     println("Add new monochromatic fluxes...")
+#
+#     # Calculate Snu_arr. Column access uses dot syntax or bracket indexing (cat.redshift) 
+#     # and element-wise multiplication requires the dot operator (.*) [3, 4].
+#     Snu_arr = gen_Snu_arr(
+#         new_lambda, 
+#         SED_dict, 
+#         cat.redshift, 
+#         cat.mu .* cat.LIR, 
+#         cat.Umean, 
+#         cat.Dlum, 
+#         cat.issb
+#     )
+#
+#     # Since the original Python uses `cat = cat.assign(...)` which returns a new DataFrame, 
+#     # we copy the input to maintain non-mutating semantics [5].
+#     new_cat = copy(cat) 
+#
+#     # Iterate over the indices of new_lambda. Julia uses 1-based indexing [6, 7].
+#     for i in eachindex(new_lambda) 
+#         # Dynamically generate column name as a Symbol (idiomatic for DataFrame column names) [8].
+#         col_name = Symbol("S$(new_lambda[i])") 
+#
+#         # Assign the calculated flux array (Snu_arr column i) to the new DataFrame.
+#         # The `df[!, :column] = data` syntax is used for efficient column assignment in DataFrames.jl [9].
+#         new_cat[!, col_name] = Snu_arr[:, i]
+#     end
+#
+#     tstop = time()
+#
+#     # Use string interpolation for printing variables within strings [10].
+#     println("New fluxes of $(length(new_cat)) galaxies generated in $(tstop - tstart)s")
+#
+#     return new_cat
+# end
+#
 
-    SED_dict = load_sed_pickle_equivalent(params["SED_file"])
-    
-    println("Add new monochromatic fluxes...")
+#List of parameters used to compute flux and preprocess stuff
+function parse_flux_params(cosmo_model,params)
+    _p(k) =
+        let v = params[k]
+            v isa AbstractString ? parse(Float64, v) : Float64(v)
+        end
 
-    # Calculate Snu_arr. Column access uses dot syntax or bracket indexing (cat.redshift) 
-    # and element-wise multiplication requires the dot operator (.*) [3, 4].
-    Snu_arr = gen_Snu_arr(
-        new_lambda, 
-        SED_dict, 
-        cat.redshift, 
-        cat.mu .* cat.LIR, 
-        cat.Umean, 
-        cat.Dlum, 
-        cat.issb
+    sed_dict = load_sed_pickle_equivalent(params["SED_file"])
+    sed_tables = (
+        lambda=sed_dict["lambda"],
+        dU=sed_dict["dU"],
+        Umean=sed_dict["Umean"],
+        nuLnu_MS=sed_dict["nuLnu_MS_arr"],
+        nuLnu_SB=sed_dict["nuLnu_SB_arr"],
     )
 
-    # Since the original Python uses `cat = cat.assign(...)` which returns a new DataFrame, 
-    # we copy the input to maintain non-mutating semantics [5].
-    new_cat = copy(cat) 
-
-    # Iterate over the indices of new_lambda. Julia uses 1-based indexing [6, 7].
-    for i in eachindex(new_lambda) 
-        # Dynamically generate column name as a Symbol (idiomatic for DataFrame column names) [8].
-        col_name = Symbol("S$(new_lambda[i])") 
-        
-        # Assign the calculated flux array (Snu_arr column i) to the new DataFrame.
-        # The `df[!, :column] = data` syntax is used for efficient column assignment in DataFrames.jl [9].
-        new_cat[!, col_name] = Snu_arr[:, i]
-    end
-
-    tstop = time()
-
-    # Use string interpolation for printing variables within strings [10].
-    println("New fluxes of $(length(new_cat)) galaxies generated in $(tstop - tstart)s")
-
-    return new_cat
+    return (
+        UmeanSB=_p("UmeanSB"),
+        UmeanMSz0=_p("UmeanMSz0"),
+        alphaMS=_p("alphaMS"),
+        zlimMS=_p("zlimMS"),
+        sigma_logUmean=_p("sigma_logUmean"),
+        SFR2LIR=_p("SFR2LIR"),
+        lambda_list=params["lambda_list"],
+        sed_tables=sed_tables,
+        LIR_LFIR_ratio_dict=load_sed_pickle_equivalent(params["ratios_file"]),
+        cosmo_model = cosmo_model
+    )
 end
-
 
 """
 Translated function to generate SED properties and fluxes.
-Note: DataFrames are modified in-place using cat[!, :col] = values.
 """
-function gen_fluxes(cat::DataFrame, params::Dict)
+function gen_fluxes(cat::DataFrame, p)
+    # Read parameters
+    (; UmeanSB, UmeanMSz0, alphaMS, zlimMS,
+        sigma_logUmean,
+        SFR2LIR,
+        lambda_list,
+        sed_tables,
+        LIR_LFIR_ratio_dict,
+        cosmo_model
+    ) = p 
+
     tstart = time() # Start timer [5]
 
     println("Generate SED properties and fluxes...")
 
     # --- 1. Compute zlimSB (Scalar Operations) ---
-    zlimSB = (log10(params["UmeanSB"]) - log10(params["UmeanMSz0"])) / params["alphaMS"]
-    zlimMS = params["zlimMS"]
+    zlimSB = (log10(UmeanSB) - log10(UmeanMSz0)) / alphaMS
+    zlimMS = zlimMS
 
-    if zlimSB > zlimMS
+    @trace if zlimSB > zlimMS
         # Julia string interpolation [2]
-        println("zlim SB (when UMS = USB)= $(params["zlimSB"])")
+        println("zlim SB (when UMS = USB)= $(zlimMS)")
         zlimSB = 9999.0 
     end
 
     # --- 2. Compute Luminosity Distance ---
-    if !("Dlum" in names(cat))
-        println("Compute luminosity distances since they have not been computed before...")
-        
-        redshifts = cat[!, :redshift]
-        # Use vector comprehension for cosmological calculation
-        Dlum_values = [Cosmology.luminosity_dist(cosmo_model, z) for z in redshifts] 
-        
-        cat[!, :Dlum] = Dlum_values
-    end
+    println("Compute luminosity distances since they have not been computed before...") 
+    # Use vector comprehension for cosmological calculation
+    Dlum_values = [Cosmology.luminosity_dist(cosmo_model, z) for z in cat.redshift]  
+    cat[!, :Dlum] = Dlum_values
 
     Ngal = nrow(cat) # Equivalent to len(cat)
 
@@ -364,67 +394,49 @@ function gen_fluxes(cat::DataFrame, params::Dict)
 
     Umean = zeros(Ngal) # Equivalent to np.zeros
 
-    redshifts = cat[!, :redshift]
-    issb = cat[!, :issb]
-
     # Find indices for MS or high-z SB: uses Julia's 1-based indexing and broadcasting operators
-    index_MS_SBhighz = findall((.!(issb)) .| (redshifts .>= zlimSB))
+    index_MS_SBhighz = findall((.!(cat.issb)) .| (cat.redshift .>= zlimSB))
 
     # Calculate Umean for MS and high-z SB (requires broadcasting dot `.` for vectorized operations)
     Umean[index_MS_SBhighz] = 10.0 .^ (
-        log10(params["UmeanMSz0"]) .+ params["alphaMS"] .* min.(redshifts[index_MS_SBhighz], zlimMS)
+        log10(UmeanMSz0) .+ alphaMS .* min.(cat.redshift[index_MS_SBhighz], zlimMS)
     )
 
     # Find indices for low-z SB
-    index_SBlowz = findall(issb .& (redshifts .< zlimSB))
+    index_SBlowz = findall(cat.issb .& (cat.redshift .< zlimSB))
 
     # Assign Umean value for low-z SB
-    Umean[index_SBlowz] .= params["UmeanSB"] # Uses broadcast assignment
+    Umean[index_SBlowz] .= UmeanSB # Uses broadcast assignment
 
     # Add log-normal scatter (np.random.normal -> randn)
-    scatter_factor = 10.0 .^ (params["sigma_logUmean"] .* randn(Ngal))
+    scatter_factor = 10.0 .^ (sigma_logUmean .* randn(Ngal))
     Umean .*= scatter_factor 
 
     cat[!, :Umean] = Umean
 
-    # --- 4. Load Grids (Serialization) ---
-    println("Load SED and LIR grids...")
-    SED_dict = load_sed_pickle_equivalent(params["SED_file"])
-    LIR_LFIR_ratio_dict = load_sed_pickle_equivalent(params["ratios_file"])
 
     # --- 5. Generate LIR ---
     println("Generate LIR...")
-    cat[!, :LIR] = params["SFR2LIR"] .* cat[!, :SFR]
-    println(keys(SED_dict))
+    cat[!, :LIR] = SFR2LIR .* cat[!, :SFR]
+
     # --- 6. Generate Flux Array (Assumed helper function call) ---
-    println("Generate Flux Array ...")
+    println("Generate Flux Array ...")    
     Snu_arr = gen_Snu_arr(
-        params["lambda_list"], 
-        SED_dict, 
-        cat[!, :redshift], 
-        cat[!, :mu] .* cat[!, :LIR], 
-        cat[!, :Umean], 
-        cat[!, :Dlum], 
-        cat[!, :issb]
+        lambda_list, 
+        sed_tables,
+        cat.redshift, 
+        cat.mu .* cat.LIR, 
+        cat.Umean, 
+        cat.Dlum, 
+        cat.issb
     )
-    #println(Snu_arr)
-    # Python: for i in range(0,len(params['lambda_list'])):
-    lambda_list = params["lambda_list"]
-    
-    lambda_list_row = reshape(lambda_list, 1, length(lambda_list))
 
-    # Iterate using Julia's 1-based indexing [1]
-    for i in 1:length(lambda_list_row) 
-        lambda_val = lambda_list_row[i]
-
-        # Dynamic column naming and assignment
-        # Python: kwargs = {'S{:d}'.format(...) : Snu_arr[:,i]}
-        col_name_str = "S$(lambda_val)"
-        col_name_sym = Symbol(col_name_str) # Convert string name to Symbol for DataFrame column indexing
-        
+    for (i,v) in enumerate(lambda_list)
+        colname = "S$(v)"
+        colsym = Symbol(colname)
         # Assign the flux vector (Snu_arr is assumed to be Ngal x N_lambda matrix)
         # Note: We use in-place column creation
-        cat[!, col_name_sym] = Snu_arr[:, i]
+        cat[!, colsym] =  Snu_arr[:, i]
     end
 
     # generate LFIR (40-400 microns)
@@ -433,10 +445,10 @@ function gen_fluxes(cat::DataFrame, params::Dict)
     # Assign the new column derived from the vector function
     cat[!, :LFIR] = gen_LFIR_vec(
         LIR_LFIR_ratio_dict, 
-        cat[!, :redshift], 
-        cat[!, :LIR], 
-        cat[!, :Umean], 
-        cat[!, :issb]
+        cat.redshift, 
+        cat.LIR, 
+        cat.Umean, 
+        cat.issb
     )
 
     tstop = time() # Stop timer
