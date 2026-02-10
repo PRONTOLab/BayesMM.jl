@@ -29,75 +29,48 @@ function linear_interp_sampling(x_target, xp_sorted::AbstractVector, fp_values::
     return ifelse(i <= 0, y_first, ifelse(i >= N, y_last, y_interp))
 end
 
-function process_magnification_grid(path_mu_file)
-    # Load the magnification grid (np.loadtxt -> DelimitedFiles.readdlm)
-    #data = readdlm(params["path_mu_file"], ',')
-    #data_mat = parse.(Float64, data) # Ensure matrix of Floats
-    df = CSV.read(path_mu_file, DataFrame, comment="#")
-    data_mat = Matrix{Float64}(df)
-
-    # 1. Slice data: Python [0, 1:] -> Julia [1, 2:end]
-    z_grid = data_mat[1, 2:end]
-    
-    # 2. Reverse (flip): Python axis=0 -> Julia dims=1 (rows)
-    mu_grid = reverse(data_mat[2:end, 1])
-    Psupmu = reverse(data_mat[2:end, 2:end]; dims=1)
-
-    return (z_grid, mu_grid, Psupmu)
-end
-
-function update_mu_for_bin(mu, indz_gal_1based, k_val, Psupmu, Ngal, mu_grid)
+function update_mu_for_bin(mu, indz_gal_1based, k_val, Psupmu, mu_grid)
     mask = indz_gal_1based .== k_val
-    has_bin = sum(mask) > 0
 
-    mu_out = @trace if has_bin
-        Psupmu_col = @allowscalar Psupmu[:, k_val]
-        u = rand(Ngal)
-        mu_new = similar(u)
-        @trace for I in eachindex(u)
-            @allowscalar mu_new[I] =
-                linear_interp_sampling(@allowscalar(u[I]), Psupmu_col, mu_grid)
-        end
-        ifelse.(mask, mu_new, mu)
-    else
-        mu
+    Psupmu_col = @allowscalar Psupmu[:, k_val]
+    u = rand(length(mu))
+    mu_new = similar(u)
+    @trace for I in eachindex(u)
+        @allowscalar mu_new[I] =
+            linear_interp_sampling(@allowscalar(u[I]), Psupmu_col, mu_grid)
     end
 
-    return mu_out
+    return ifelse.(mask, mu_new, mu)
 end
 
-function gen_magnification(cat, params, magnify = true)
+function gen_magnification(cat, mag_params, magnify = true)
 
     tstart = time()
 
     println("Generate magnification...")
 
     if magnify == true
-        (z_grid, mu_grid, Psupmu) = process_magnification_grid(params["path_mu_file"]) 
+        (z_grid, mu_grid, Psupmu) = mag_params
         # Calculate redshift grid index (emulating np.interp/round/fix)
         # We find the 1-based index in z_grid where the redshift falls, clamping to 1:N_z
-        # searchsortedlast gives the 1-based index (i) such that z_grid[i] <= value
-        indz_gal_1based = searchsortedlast.(Ref(z_grid), cat.redshift)
+        # searchsortedlast gives the 1-based index (i) such that z_grid[i] <= value.
+        # Use a scalar loop instead of broadcast(Ref(...), ...) to avoid the traced Ref broadcast path.
         N_z = length(z_grid)
-        # Clamp ensures indices are within bounds [1, N_z]
-        indz_gal_1based = clamp.(indz_gal_1based, 1, N_z)
+        redshift = cat.redshift
+        indz_gal_1based = map(z -> searchsortedlast(z_grid,z), cat.redshift)
         println("Type of indz_gal_1based: ", typeof(indz_gal_1based))
         
-        # # To match Python's internal 0-based index list for iteration, convert the value:
-        # indz_gal_0based = indz_gal_1based .- 1 
-        
         Ngal = size(cat, 1) # np.shape(cat)
-        mu = zeros(Ngal)
+        mu = zero.(redshift)
         
         println("Looping over ", N_z, " redshift indices...")
         # Loop over all redshift bins; execute work only when bin is populated.
         @trace for k_val = 1:N_z
-            mu = update_mu_for_bin(mu, indz_gal_1based, k_val, Psupmu, Ngal, mu_grid)
+            mu = update_mu_for_bin(mu, indz_gal_1based, k_val, Psupmu, mu_grid)
         end
     else
         println("The magnify keyword is set to False. mu = 1 for all the sources.")
-        Ngal = size(cat, 1)
-        mu = ones(Float64, Ngal) # np.ones(len(cat))
+        mu = one.(cat.redshift)
     end
 
     # Assign the new column to the DataFrame (cat = cat.assign(mu = mu))

@@ -84,18 +84,40 @@ function gen_sfr_props2(cat::DataFrame, p::NamedTuple)
     # return (qflag, SFR_final, issb_final)
 end
 
-function process!(cat,sfr_params, params)
+function process!(cat,sfr_params, mag_params)
     cat = gen_sfr_props2(cat, sfr_params)
-	# cat = gen_magnification(cat, params)
+	cat = gen_magnification(cat, mag_params)
     return cat
 	# cat = gen_fluxes(cat, params)
 end
 
-# Predeclare output columns so compiled code does not change table schema.
+# Moving magnification grid processing here
+function process_magnification_grid(path_mu_file)
+    # Load the magnification grid (np.loadtxt -> DelimitedFiles.readdlm)
+    #data = readdlm(params["path_mu_file"], ',')
+    #data_mat = parse.(Float64, data) # Ensure matrix of Floats
+    df = CSV.read(path_mu_file, DataFrame, comment="#")
+    data_mat = Matrix{Float64}(df)
+
+    # 1. Slice data: Python [0, 1:] -> Julia [1, 2:end]
+    z_grid = data_mat[1, 2:end]
+    
+    # 2. Reverse (flip): Python axis=0 -> Julia dims=1 (rows)
+    mu_grid = reverse(data_mat[2:end, 1])
+    Psupmu = reverse(data_mat[2:end, 2:end]; dims=1)
+
+    return (z_grid, mu_grid, Psupmu)
+end
+
+# Preprocess data 
+mag_params = process_magnification_grid(params["path_mu_file"])
+mag_r_params = Reactant.to_rarray(mag_params)
 cat_og[!, :SFR] = zeros(Float64, nrow(cat_og))
 cat_og[!, :issb] = falses(nrow(cat_og))
+cat_og[!, :mu] = ones(Float64, nrow(cat_og))
 cat_ra = Reactant.to_rarray(cat_og)
-cat_f = @jit process!(cat_ra, sfr_params, params)
+
+cat_f = @jit process!(cat_ra, sfr_params, mag_r_params)
 println("\n=== Finished Computations ===")
 
 # println("qflag: ", typeof(qflag), " size=", size(qflag))
