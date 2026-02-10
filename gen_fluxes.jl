@@ -197,7 +197,7 @@ end
 
 
 
-function gen_LFIR_vec(LIR_LFIR_ratio_dict, redshift, LIR, Umean, issb)
+function gen_LFIR_vec(ratio_tables, redshift, LIR, Umean, issb)
     # 1. Initialize LFIR array (using zeros_like is equivalent to zeros(size(redshift)))
     # We assume redshift is a 1D vector of numerical type (e.g., Float64)
     LFIR = zeros(eltype(redshift), size(redshift)) 
@@ -212,12 +212,12 @@ function gen_LFIR_vec(LIR_LFIR_ratio_dict, redshift, LIR, Umean, issb)
     # 3. Uindex Calculation (Vectorized operations replacing np.round, np.astype)
 
     # Note: Array indexing in Julia starts at 1, so the first element is [6], not  [2].
-    # We assume LIR_LFIR_ratio_dict["Umean"] is an array/vector.
-    Umean_min = LIR_LFIR_ratio_dict[:"Umean"][6]#[6] # Accessing the first element (index 1)
+    # We assume ratio_tables.Umean is an array/vector.
+    Umean_min = ratio_tables.Umean[6]#[6] # Accessing the first element (index 1)
     
-    # Python: Uindex = np.round((Umean - LIR_LFIR_ratio_dict["Umean"]) / LIR_LFIR_ratio_dict["dU"])
+    # Python: Uindex = np.round((Umean - ratio_tables["Umean"]) / ratio_tables["dU"])
     # Julia uses broadcasting (dot notation) for element-wise operations [7].
-    Uindex = round.((Umean .- Umean_min) ./ LIR_LFIR_ratio_dict["dU"])
+    Uindex = round.((Umean .- Umean_min) ./ ratio_tables.dU)
     
     # Python: Uindex.astype(int) is replaced by broadcasting Int.()
     Uindex = Int.(Uindex) 
@@ -225,7 +225,7 @@ function gen_LFIR_vec(LIR_LFIR_ratio_dict, redshift, LIR, Umean, issb)
     # 4. Clamping Indices (Replacing np.maximum, np.minimum, and array size calculation)
 
     # Maximum valid index in Julia is length(array) (replaces Python's np.size(arr) - 1) [8].
-    Umax_index = length(LIR_LFIR_ratio_dict["Umean"]) 
+    Umax_index = length(ratio_tables.Umean) 
     
     # Clamp minimum index to 1 (replaces Python's 0)
     Uindex = max.(Uindex, 1) 
@@ -239,10 +239,10 @@ function gen_LFIR_vec(LIR_LFIR_ratio_dict, redshift, LIR, Umean, issb)
     # We use the index vectors selSB and selMS to access and update elements simultaneously.
     
     # Starburst (SB) calculation: LFIR[SB indices] = LIR[SB indices] * ratio[Uindex[SB indices]]
-    @views LFIR[selSB] = LIR[selSB] .* LIR_LFIR_ratio_dict["LFIR_LIR_ratio_SB"][Uindex[selSB]]
+    @views LFIR[selSB] = LIR[selSB] .* ratio_tables.LFIR_LIR_ratio_SB[Uindex[selSB]]
     
     # Main Sequence (MS) calculation: LFIR[MS indices] = LIR[MS indices] * ratio[Uindex[MS indices]]
-    @views LFIR[selMS] = LIR[selMS] .* LIR_LFIR_ratio_dict["LFIR_LIR_ratio_MS"][Uindex[selMS]]
+    @views LFIR[selMS] = LIR[selMS] .* ratio_tables.LFIR_LIR_ratio_MS[Uindex[selMS]]
 
     return LFIR
 end
@@ -279,50 +279,6 @@ function load_sed_pickle_equivalent(file_path::String)
 
 end
 
-
-# function add_fluxes(cat::DataFrame, params::Dict, new_lambda::AbstractVector)
-#
-#     tstart = time()
-#
-#     SED_dict = load_sed_pickle_equivalent(params["SED_file"])
-#
-#     println("Add new monochromatic fluxes...")
-#
-#     # Calculate Snu_arr. Column access uses dot syntax or bracket indexing (cat.redshift) 
-#     # and element-wise multiplication requires the dot operator (.*) [3, 4].
-#     Snu_arr = gen_Snu_arr(
-#         new_lambda, 
-#         SED_dict, 
-#         cat.redshift, 
-#         cat.mu .* cat.LIR, 
-#         cat.Umean, 
-#         cat.Dlum, 
-#         cat.issb
-#     )
-#
-#     # Since the original Python uses `cat = cat.assign(...)` which returns a new DataFrame, 
-#     # we copy the input to maintain non-mutating semantics [5].
-#     new_cat = copy(cat) 
-#
-#     # Iterate over the indices of new_lambda. Julia uses 1-based indexing [6, 7].
-#     for i in eachindex(new_lambda) 
-#         # Dynamically generate column name as a Symbol (idiomatic for DataFrame column names) [8].
-#         col_name = Symbol("S$(new_lambda[i])") 
-#
-#         # Assign the calculated flux array (Snu_arr column i) to the new DataFrame.
-#         # The `df[!, :column] = data` syntax is used for efficient column assignment in DataFrames.jl [9].
-#         new_cat[!, col_name] = Snu_arr[:, i]
-#     end
-#
-#     tstop = time()
-#
-#     # Use string interpolation for printing variables within strings [10].
-#     println("New fluxes of $(length(new_cat)) galaxies generated in $(tstop - tstart)s")
-#
-#     return new_cat
-# end
-#
-
 #List of parameters used to compute flux and preprocess stuff
 function parse_flux_params(cosmo_model,params)
     _p(k) =
@@ -338,6 +294,13 @@ function parse_flux_params(cosmo_model,params)
         nuLnu_MS=sed_dict["nuLnu_MS_arr"],
         nuLnu_SB=sed_dict["nuLnu_SB_arr"],
     )
+    ratio_dict = load_sed_pickle_equivalent(params["ratios_file"])
+    ratio_tables = (
+        Umean=ratio_dict["Umean"],
+        dU=ratio_dict["dU"],
+        LFIR_LIR_ratio_MS=ratio_dict["LFIR_LIR_ratio_MS"],
+        LFIR_LIR_ratio_SB=ratio_dict["LFIR_LIR_ratio_SB"],
+    )
 
     return (
         UmeanSB=_p("UmeanSB"),
@@ -348,7 +311,7 @@ function parse_flux_params(cosmo_model,params)
         SFR2LIR=_p("SFR2LIR"),
         lambda_list=params["lambda_list"],
         sed_tables=sed_tables,
-        LIR_LFIR_ratio_dict=load_sed_pickle_equivalent(params["ratios_file"]),
+        ratio_tables=ratio_tables,
         cosmo_model = cosmo_model
     )
 end
@@ -363,7 +326,7 @@ function gen_fluxes(cat::DataFrame, p)
         SFR2LIR,
         lambda_list,
         sed_tables,
-        LIR_LFIR_ratio_dict,
+        ratio_tables,
         cosmo_model
     ) = p 
 
@@ -381,12 +344,6 @@ function gen_fluxes(cat::DataFrame, p)
         zlimSB = 9999.0 
     end
 
-    # --- 2. Compute Luminosity Distance ---
-    println("Compute luminosity distances since they have not been computed before...") 
-    # Use vector comprehension for cosmological calculation
-    Dlum_values = [Cosmology.luminosity_dist(cosmo_model, z) for z in cat.redshift]  
-    cat[!, :Dlum] = Dlum_values
-
     Ngal = nrow(cat) # Equivalent to len(cat)
 
     # --- 3. Draw <U> parameters (Vectorized Operations) ---
@@ -394,19 +351,13 @@ function gen_fluxes(cat::DataFrame, p)
 
     Umean = zeros(Ngal) # Equivalent to np.zeros
 
-    # Find indices for MS or high-z SB: uses Julia's 1-based indexing and broadcasting operators
-    index_MS_SBhighz = findall((.!(cat.issb)) .| (cat.redshift .>= zlimSB))
+    # Reactant-friendly mask updates avoid findall(::TracedRArray{Bool}).
+    mask_MS_SBhighz = (.!(cat.issb)) .| (cat.redshift .>= zlimSB)
+    Umean_MS_SBhighz = 10.0 .^ (log10(UmeanMSz0) .+ alphaMS .* min.(cat.redshift, zlimMS))
+    Umean = ifelse.(mask_MS_SBhighz, Umean_MS_SBhighz, Umean)
 
-    # Calculate Umean for MS and high-z SB (requires broadcasting dot `.` for vectorized operations)
-    Umean[index_MS_SBhighz] = 10.0 .^ (
-        log10(UmeanMSz0) .+ alphaMS .* min.(cat.redshift[index_MS_SBhighz], zlimMS)
-    )
-
-    # Find indices for low-z SB
-    index_SBlowz = findall(cat.issb .& (cat.redshift .< zlimSB))
-
-    # Assign Umean value for low-z SB
-    Umean[index_SBlowz] .= UmeanSB # Uses broadcast assignment
+    mask_SBlowz = cat.issb .& (cat.redshift .< zlimSB)
+    Umean = ifelse.(mask_SBlowz, UmeanSB, Umean)
 
     # Add log-normal scatter (np.random.normal -> randn)
     scatter_factor = 10.0 .^ (sigma_logUmean .* randn(Ngal))
@@ -444,7 +395,7 @@ function gen_fluxes(cat::DataFrame, p)
     
     # Assign the new column derived from the vector function
     cat[!, :LFIR] = gen_LFIR_vec(
-        LIR_LFIR_ratio_dict, 
+        ratio_tables, 
         cat.redshift, 
         cat.LIR, 
         cat.Umean, 
