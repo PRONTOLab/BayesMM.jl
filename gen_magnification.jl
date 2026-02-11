@@ -2,7 +2,7 @@ using CSV, DataFrames
 using Random
 using DelimitedFiles
 using LinearAlgebra: searchsortedlast # Used for efficient index lookup in sorted arrays
-using Base: size, length, time, println, reverse, zeros, ones
+using Base: size, length, println, reverse, zeros, ones
 
 # Helper function to perform 1D linear interpolation (simulating np.interp behavior for CDF sampling)
 # Since the input xp_sorted (Psupmu column, usually a CDF) is sorted, we can use searchsortedlast.
@@ -44,9 +44,6 @@ function update_mu_for_bin(mu, indz_gal_1based, k_val, Psupmu, mu_grid)
 end
 
 function gen_magnification(cat, mag_params, magnify = true)
-
-    tstart = time()
-
     println("Generate magnification...")
 
     if magnify == true
@@ -75,8 +72,6 @@ function gen_magnification(cat, mag_params, magnify = true)
 
     # Assign the new column to the DataFrame (cat = cat.assign(mu = mu))
     cat[!, :mu] = mu
-    tstop = time()
-    println(size(cat, 1), " magnifications generated in ", tstop - tstart, "s")
     
     return cat
 end

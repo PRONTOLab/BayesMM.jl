@@ -269,8 +269,6 @@ function gen_fluxes(cat::DataFrame, p)
         cosmo_model
     ) = p 
 
-    tstart = time() # Start timer [5]
-
     println("Generate SED properties and fluxes...")
 
     # --- 1. Compute zlimSB (Scalar Operations) ---
@@ -340,12 +338,6 @@ function gen_fluxes(cat::DataFrame, p)
         cat.Umean, 
         cat.issb
     )
-
-    tstop = time() # Stop timer
-
-    # Print final timing and results using Julia's println and interpolation
-    # Equivalent to Python's len(cat) is nrow(cat)
-    println("SED properties of $(nrow(cat)) generated in $(tstop - tstart)s")
 
     return cat
 end

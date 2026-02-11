@@ -17,11 +17,6 @@ include("gen_sfr_props.jl")
 include("gen_magnification.jl")
 include("gen_fluxes.jl")
 
-## Initialize stuff
-csv_idl_path = "data/SIDES_Bethermin2017_short2.csv" #use truncated csv for
-params = load_params("SIDES_from_original.par")
-cat_og = load_sides_csv(csv_idl_path)
-
 function gen_sfr_props2(cat::DataFrame, p::NamedTuple)
     # Read parameters
     (; Chab2Salp_num, Mt0, alpha1, alpha2, sigma0, beta1, beta2, qfrac0, gamma,
@@ -96,34 +91,92 @@ function process!(cat,
     return cat
 end
 
-# SFR props params
-sfr_params = parse_sfr_params(params)
-# Magnification params
-mag_params = process_magnification_grid(params["path_mu_file"])
-mag_r_params = Reactant.to_rarray(mag_params)
-# Flux params
-flux_params = parse_flux_params(cosmo_model,params)
-flux_r_params = Reactant.to_rarray(flux_params)
-
-#Dataframe params
-#sfr
-cat_og[!, :SFR] = zeros(Float64, nrow(cat_og))
-cat_og[!, :issb] = falses(nrow(cat_og))
-#magnification
-cat_og[!, :mu] = ones(Float64, nrow(cat_og))
-# fluxes
-cat_og[!, :Dlum] = [ustrip(u"m", Cosmology.luminosity_dist(cosmo_model, z)) for z in cat_og.redshift]
-cat_og[!, :Umean] = zeros(Float64, nrow(cat_og))
-cat_og[!, :LIR] = zeros(Float64, nrow(cat_og))
-cat_og[!, :LFIR] = zeros(Float64,nrow(cat_og))
-for v in flux_params.lambda_list
-    colname = "S$(v)"
-    colsym = Symbol(colname)
-    cat_og[!, colsym] = zeros(Float64,nrow(cat_og))
+function preallocate_output_columns!(cat::DataFrame, flux_params)
+    Ngal = nrow(cat)
+    cat[!, :SFR] = zeros(Float64, Ngal)
+    cat[!, :issb] = falses(Ngal)
+    cat[!, :mu] = ones(Float64, Ngal)
+    cat[!, :Dlum] = [ustrip(u"m", Cosmology.luminosity_dist(cosmo_model, z)) for z in cat.redshift]
+    cat[!, :Umean] = zeros(Float64, Ngal)
+    cat[!, :LIR] = zeros(Float64, Ngal)
+    cat[!, :LFIR] = zeros(Float64, Ngal)
+    for v in flux_params.lambda_list
+        colname = "S$(v)"
+        colsym = Symbol(colname)
+        cat[!, colsym] = zeros(Float64, Ngal)
+    end
+    return cat
 end
-cat_ra = Reactant.to_rarray(cat_og)
 
-cat_f = @jit process!(cat_ra, sfr_params, mag_r_params, flux_r_params)
+function build_runtime_inputs(csv_idl_path::String, param_path::String)
+    params = load_params(param_path)
+    cat_template = load_sides_csv(csv_idl_path)
+    sfr_params = parse_sfr_params(params)
+    mag_params = process_magnification_grid(params["path_mu_file"])
+    flux_params = parse_flux_params(cosmo_model, params)
+    preallocate_output_columns!(cat_template, flux_params)
+    return (
+        cat_template = cat_template,
+        sfr_params = sfr_params,
+        mag_params = mag_params,
+        flux_params = flux_params
+    )
+end
+
+function to_reactant_inputs(mag_params, flux_params)
+    return (
+        mag_r_params = Reactant.to_rarray(mag_params),
+        flux_r_params = Reactant.to_rarray(flux_params)
+    )
+end
+
+function benchmark_process!(runtime_inputs)
+    reactant_inputs = to_reactant_inputs(runtime_inputs.mag_params, runtime_inputs.flux_params)
+
+    println("\n=== Benchmark process! ===")
+
+    cat_nonjit = copy(runtime_inputs.cat_template)
+    Random.seed!(BENCHMARK_SEED)
+    t_nonjit = @elapsed process!(
+        cat_nonjit,
+        runtime_inputs.sfr_params,
+        runtime_inputs.mag_params,
+        runtime_inputs.flux_params
+    )
+
+    cat_jit_cold = Reactant.to_rarray(copy(runtime_inputs.cat_template))
+    Random.seed!(BENCHMARK_SEED)
+    t_jit_cold = @elapsed @jit process!(
+        cat_jit_cold,
+        runtime_inputs.sfr_params,
+        reactant_inputs.mag_r_params,
+        reactant_inputs.flux_r_params
+    )
+
+    cat_jit_warm = Reactant.to_rarray(copy(runtime_inputs.cat_template))
+    Random.seed!(BENCHMARK_SEED)
+    t_jit_warm = @elapsed @jit process!(
+        cat_jit_warm,
+        runtime_inputs.sfr_params,
+        reactant_inputs.mag_r_params,
+        reactant_inputs.flux_r_params
+    )
+
+    println("process! (non-jit): ", t_nonjit, "s")
+    println("process! (@jit cold): ", t_jit_cold, "s")
+    println("process! (@jit warm): ", t_jit_warm, "s")
+
+    return (
+        nonjit = cat_nonjit,
+        jit_cold = cat_jit_cold,
+        jit_warm = cat_jit_warm,
+        timings = (t_nonjit = t_nonjit, t_jit_cold = t_jit_cold, t_jit_warm = t_jit_warm)
+    )
+end
+
+csv_idl_path = "data/SIDES_Bethermin2017_short2.csv"
+runtime_inputs = build_runtime_inputs(csv_idl_path, "SIDES_from_original.par")
+benchmark_results = benchmark_process!(runtime_inputs)
 println("\n=== Finished Computations ===")
 
 # println("qflag: ", typeof(qflag), " size=", size(qflag))
