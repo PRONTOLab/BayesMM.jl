@@ -73,6 +73,13 @@ function benchmark_process!(runtime_inputs)
 
     cat_nonjit = copy(runtime_inputs.cat_template)
     Random.seed!(BENCHMARK_SEED)
+    process!(
+        cat_nonjit,
+        runtime_inputs.sfr_params,
+        runtime_inputs.mag_params,
+        runtime_inputs.flux_params
+    )
+
     t_nonjit = @elapsed process!(
         cat_nonjit,
         runtime_inputs.sfr_params,
@@ -81,24 +88,37 @@ function benchmark_process!(runtime_inputs)
     )
 
     cat_jit_cold = Reactant.to_rarray(copy(runtime_inputs.cat_template))
-    Random.seed!(BENCHMARK_SEED)
-    t_jit_cold = @elapsed @jit process!(
-        cat_jit_cold,
-        runtime_inputs.sfr_params,
-        reactant_inputs.mag_r_params,
-        reactant_inputs.flux_r_params
-    )
-
+    # Random.seed!(BENCHMARK_SEED)
+    # t_jit_cold = @elapsed @jit process!(
+    #     cat_jit_cold,
+    #     runtime_inputs.sfr_params,
+    #     reactant_inputs.mag_r_params,
+    #     reactant_inputs.flux_r_params
+    # )
+    
     cat_jit_warm = Reactant.to_rarray(copy(runtime_inputs.cat_template))
-    Random.seed!(BENCHMARK_SEED)
-    t_jit_warm = @elapsed @jit process!(
+    v = @compile sync=true process!(
         cat_jit_warm,
         runtime_inputs.sfr_params,
         reactant_inputs.mag_r_params,
         reactant_inputs.flux_r_params
     )
 
-    println("process! (non-jit): ", t_nonjit, "s")
+    Random.seed!(BENCHMARK_SEED)
+    t_jit_cold = @elapsed v(
+        cat_jit_warm,
+        runtime_inputs.sfr_params,
+        reactant_inputs.mag_r_params,
+        reactant_inputs.flux_r_params)
+
+    
+    t_jit_warm = @elapsed v(
+        cat_jit_warm,
+        runtime_inputs.sfr_params,
+        reactant_inputs.mag_r_params,
+        reactant_inputs.flux_r_params)
+
+    println("process! (default-Julia): ", t_nonjit, "s")
     println("process! (@jit cold): ", t_jit_cold, "s")
     println("process! (@jit warm): ", t_jit_warm, "s")
 
