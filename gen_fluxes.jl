@@ -155,22 +155,11 @@ end
 
 
 function gen_LFIR_vec(ratio_tables, redshift, LIR, Umean, issb)
-    # 1. Initialize LFIR array (using zeros_like is equivalent to zeros(size(redshift)))
-    # We assume redshift is a 1D vector of numerical type (e.g., Float64)
-    LFIR = zeros(eltype(redshift), size(redshift)) 
-
-    # 2. Identify Selection Indices (replacing np.where and == True/False)
-    
-    # In Julia, issb is a Vector{Bool}. We use findall for 1-based indices.
-    # Note: issb == true is typically written simply as `issb` in Julia.
-    selSB = findall(issb)      # Indices where issb is true (Starburst)
-    selMS = findall(.!issb)    # Indices where issb is false (Main Sequence)
-    
-    # 3. Uindex Calculation (Vectorized operations replacing np.round, np.astype)
+    # 1. Uindex Calculation (Vectorized operations replacing np.round, np.astype)
 
     # Note: Array indexing in Julia starts at 1, so the first element is [6], not  [2].
     # We assume ratio_tables.Umean is an array/vector.
-    Umean_min = ratio_tables.Umean[6]#[6] # Accessing the first element (index 1)
+    Umean_min = @allowscalar ratio_tables.Umean[6]#[6] # Accessing the first element (index 1)
     
     # Python: Uindex = np.round((Umean - ratio_tables["Umean"]) / ratio_tables["dU"])
     # Julia uses broadcasting (dot notation) for element-wise operations [7].
@@ -179,7 +168,7 @@ function gen_LFIR_vec(ratio_tables, redshift, LIR, Umean, issb)
     # Python: Uindex.astype(int) is replaced by broadcasting Int.()
     Uindex = Int.(Uindex) 
 
-    # 4. Clamping Indices (Replacing np.maximum, np.minimum, and array size calculation)
+    # 2. Clamping Indices (Replacing np.maximum, np.minimum, and array size calculation)
 
     # Maximum valid index in Julia is length(array) (replaces Python's np.size(arr) - 1) [8].
     Umax_index = length(ratio_tables.Umean) 
@@ -190,18 +179,11 @@ function gen_LFIR_vec(ratio_tables, redshift, LIR, Umean, issb)
     # Clamp maximum index
     Uindex = min.(Uindex, Umax_index)
     
-    # 5. Luminosity Calculation (Replacing array indexing and multiplication)
-    
-    # Python slices selectSB (the tuple containing the index array) are not needed in Julia.
-    # We use the index vectors selSB and selMS to access and update elements simultaneously.
-    
-    # Starburst (SB) calculation: LFIR[SB indices] = LIR[SB indices] * ratio[Uindex[SB indices]]
-    @views LFIR[selSB] = LIR[selSB] .* ratio_tables.LFIR_LIR_ratio_SB[Uindex[selSB]]
-    
-    # Main Sequence (MS) calculation: LFIR[MS indices] = LIR[MS indices] * ratio[Uindex[MS indices]]
-    @views LFIR[selMS] = LIR[selMS] .* ratio_tables.LFIR_LIR_ratio_MS[Uindex[selMS]]
-
-    return LFIR
+    # 3. Luminosity Calculation (mask-select between SB and MS ratios per galaxy).
+    ratio_SB = ratio_tables.LFIR_LIR_ratio_SB[Uindex]
+    ratio_MS = ratio_tables.LFIR_LIR_ratio_MS[Uindex]
+    ratio_selected = ifelse.(issb, ratio_SB, ratio_MS)
+    return LIR .* ratio_selected
 end
 
 
@@ -339,12 +321,12 @@ function gen_fluxes(cat::DataFrame, p)
         cat.issb
     )
 
-    for (i,v) in enumerate(lambda_list)
-        colname = "S$(v)"
-        colsym = Symbol(colname)
-        # Assign the flux vector (Snu_arr is assumed to be Ngal x N_lambda matrix)
-        # Note: We use in-place column creation
-        cat[!, colsym] =  Snu_arr[:, i]
+    N_lambda = size(Snu_arr, 2)
+    sflux_col_start = ncol(cat) - N_lambda + 1
+    for i in 1:N_lambda
+        col_idx = sflux_col_start + i - 1
+        # S-flux columns are preallocated at the tail of the DataFrame before tracing.
+        cat[!, col_idx] = @allowscalar Snu_arr[:, i]
     end
 
     # generate LFIR (40-400 microns)
