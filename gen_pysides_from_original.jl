@@ -3,6 +3,7 @@ using Reactant
 using DataFrames
 using Random
 using Cosmology
+using Unitful
 const cosmo_model = Cosmology.cosmology() 
 using CSV
 Reactant.set_default_backend("cpu")
@@ -111,7 +112,7 @@ cat_og[!, :issb] = falses(nrow(cat_og))
 #magnification
 cat_og[!, :mu] = ones(Float64, nrow(cat_og))
 # fluxes
-cat_og[!, :Dlum] = [Cosmology.luminosity_dist(cosmo_model, z) for z in cat_og.redshift] 
+cat_og[!, :Dlum] = [ustrip(u"m", Cosmology.luminosity_dist(cosmo_model, z)) for z in cat_og.redshift]
 cat_og[!, :Umean] = zeros(Float64, nrow(cat_og))
 cat_og[!, :LIR] = zeros(Float64, nrow(cat_og))
 cat_og[!, :LFIR] = zeros(Float64,nrow(cat_og))

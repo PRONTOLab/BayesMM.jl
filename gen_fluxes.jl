@@ -1,7 +1,6 @@
 using Distributed # For parallel processing (replaces Python's multiprocessing)
 using Unitful, UnitfulAstro # For unit handling (replaces astropy.units)
 using PhysicalConstants # For constants (replaces cst.c)
-using Interpolations 
 # Assuming Base.Threads.cpu_count() is available or defined 
 const CPU_COUNT = Sys.CPU_THREADS # Or manually set addprocs(N)
 using Statistics
@@ -36,78 +35,63 @@ end
 # If running locally, you might need to wrap the definition in @everywhere
 # or ensure it's defined globally before starting workers.
 
-function worker(ks, lambda_list, issb, Uindex, sed_tables, redshift)
-    # 1. Filter None indices (ks are 1-based indices here)
-    ks = filter(!isnothing, ks) # Literal translation of filtering None [1, 2]
+function interp_sorted_flux(x_target, xp_sorted::AbstractVector, fp_values::AbstractVector)
+    i = searchsortedlast(xp_sorted, x_target)
+    n = length(xp_sorted)
 
-    N_gal = length(ks)
+    i_lo = ifelse(i <= 0, 1, ifelse(i >= n, n - 1, i))
+    i_hi = i_lo + 1
+
+    x1 = @allowscalar xp_sorted[i_lo]
+    x2 = @allowscalar xp_sorted[i_hi]
+    y1 = @allowscalar fp_values[i_lo]
+    y2 = @allowscalar fp_values[i_hi]
+
+    d = x2 - x1
+    y_interp = ifelse(d == 0, y1, y1 + ((y2 - y1) / d) * (x_target - x1))
+
+    return ifelse(i <= 0, @allowscalar(fp_values[1]), ifelse(i >= n, @allowscalar(fp_values[n]), y_interp))
+end
+
+function worker(lambda_list, issb, Uindex, sed_tables, redshift)
+    N_gal = length(redshift)
     N_lambda = length(lambda_list)
     
-    # Initialize nuLnu (note: starting with dimensionless array, units are added later)
-    nuLnu = zeros(Float64, N_gal, N_lambda) 
+    # 2. Calculate rest-frame wavelengths and rest-frame frequencies (unitless).
+    redshift_col = reshape(redshift, N_gal, 1) # Force column vector for broadcasting
 
-    # 2. Calculate lambda_rest (vectorized operations replacing np.newaxis and broadcasting)
-    # np.array(redshift)[ks, np.newaxis] is replaced by extracting the subset and reshaping to N_gal x 1.
-    redshift_subset = redshift[ks]
-    redshift_col = reshape(redshift_subset, N_gal, 1) # Force column vector for broadcasting
+    # lambda_list is in micron. Convert to meter for nu = c / lambda.
+    lambda_rest_um = reshape(lambda_list, 1, N_lambda) ./ (1.0 .+ redshift_col)
+    lambda_rest_m = lambda_rest_um .* 1.0e-6
+    c_m_per_s = 299792458.0
+    nu_rest_Hz = c_m_per_s ./ lambda_rest_m
 
-    # Apply broadcasting (./, .+) and add units (u"μm")
-    # Python: lambda_list / (1 + np.array(redshift)[ks, np.newaxis]) * u.um
-    # size(lambda_list) = (10, )
-    
-    # size(redshift_col) = (N)
-    # size(lambda_rest) = (N, 10)
-    lambda_rest = ( reshape(lambda_list, 1, 10) ./ (1.0 .+ reshape(redshift_col, length(redshift_col), 1))).*u"μm"
-
-    #println(length(lambda_rest))
-    #println(lambda_rest)
-
-    # 3. Calculate nu_rest_Hz 
-    # Python: (cst.c * u.m/u.s) / lambda_rest.to(u.m)
-    # Use Julia's unit conversion (`|> u"m"`) and constant access (`c`)
-    c_speed = uconvert(u"m/s", c) # Ensure c is in m/s for clean calculation
-    
-    # nu_rest_Hz is calculated as a matrix of Quantities
-    nu_rest_Hz = (c_speed ./ (lambda_rest .|> u"m")) .|> u"Hz"
+    # Hold interpolated SED values in traced storage.
+    nuLnu = zero.(lambda_rest_um)
 
     # 4. Interpolation Loop (Replacing np.interp with Interpolations.jl)
-    for i in 1:N_gal
-        k = ks[i] # Current 1-based index in the full catalog
-        
-        # NOTE ON INDEXING: Julia is 1-indexed. Uindex is already 1-based and clamped.
-        
+    @trace for i in 1:N_gal
         # Data points for interpolation (X-axis)
         lambda_interp_x = sed_tables.lambda
 
         # Pick the MS/SB table directly from the pre-extracted SED arrays.
-        sed_table = ifelse(issb[k], sed_tables.nuLnu_SB, sed_tables.nuLnu_MS)
-        sed_data = sed_table[:, Uindex[k]]
+        is_sb = @allowscalar issb[i]
+        u_idx = @allowscalar Uindex[i]
+        sed_data_ms = sed_tables.nuLnu_MS[:, u_idx]
+        sed_data_sb = sed_tables.nuLnu_SB[:, u_idx]
+        sed_data = ifelse.(is_sb, sed_data_sb, sed_data_ms)
         
-        # Create interpolation object (Linear is standard for np.interp; Line() handles extrapolation)
-        # Assuming SED_dict[stype[k]] is Matrix{Float64}, hence sed_data is Vector{Float64}
-        interp_itp = LinearInterpolation(lambda_interp_x, sed_data, extrapolation_bc=Line())
-
-        
-        # Values to interpolate (rest-frame lambdas for this galaxy)
-        lambda_rest_row = ustrip(lambda_rest[i, :])
-
-        
-        # Apply interpolation element-wise (using broadcasting .() on the interpolation object)
-        nuLnu_row = interp_itp.(lambda_rest_row) 
-        
-        # Store result (now just Float64, we will add units back later)
-        nuLnu[i, :] = nuLnu_row
+        # Apply interpolation element-wise using a traced-safe kernel.
+        @trace for j in 1:N_lambda
+            x = @allowscalar lambda_rest_um[i, j]
+            y = interp_sorted_flux(x, lambda_interp_x, sed_data)
+            @allowscalar setindex!(nuLnu, y, i, j)
+        end
     end
     
 
-    # Re-add assumed units for nuLnu output to allow the final division to work
-    nuLnu_quantified = nuLnu .* u"W"
-
-    # 5. Final Calculation and Return Value
-    # Python: (nuLnu / nu_rest_Hz).value
-    # Element-wise division (./). The result is dimensionless because units cancel to Hz^-1
-    # .|> Unitful.NoUnits converts the Quantity to a pure Float (replaces .value in Python)
-    return ustrip(nuLnu_quantified ./ nu_rest_Hz) 
+    # 5. Return nuLnu / nu as a unitless numeric array.
+    return nuLnu ./ nu_rest_Hz
 end
 
 function gen_Snu_arr(lambda_list, sed_tables, redshift, LIR, Umean, Dlum, issb)
@@ -116,7 +100,7 @@ function gen_Snu_arr(lambda_list, sed_tables, redshift, LIR, Umean, Dlum, issb)
     # 2. Uindex Calculation (Broadcasted operations replacing NumPy)
     
     # sed_tables.Umean[3] is the first element (replaces Python's  due to 1-indexing)
-    Umean_min = sed_tables.Umean[3] # Accesses the first element (Julia is 1-indexed)
+    Umean_min = @allowscalar sed_tables.Umean[3] # Accesses the first element (Julia is 1-indexed)
     dU = sed_tables.dU
     
     # Uindex calculation: round, division, and subtraction are all broadcasted
@@ -134,46 +118,23 @@ function gen_Snu_arr(lambda_list, sed_tables, redshift, LIR, Umean, Dlum, issb)
     # Clamp maximum index (replaces Python's np.size(arr) - 1)
     Uindex = min.(Uindex, Umax_index)
     
-    # 3. Parallel Execution Setup (Replacing Python Pool/map)
-
-    # Prepare input arguments (range(len(redshift)) -> 1:N_total)
-    index_range = 1:N_total
-    
-    # Determine chunk size (// cpu_count() -> div(N_total, CPU_COUNT))
-    chunk_size = div(N_total, CPU_COUNT) 
-    
-    # Create index chunks using the Julia grouper
-    index_chunks = grouper(N_total, CPU_COUNT)
-    #println(size(lambda_list))
-    #println(size(Uindex))
-    #println(size(redshift))
-    
-    Worker_partial(ks) = worker(
-        ks, 
-        lambda_list, 
-        issb, 
-        Uindex, 
-        sed_tables, 
+    # 3. Serial execution setup (avoid pmap during tracing).
+    concatenated_worker_output = worker(
+        lambda_list,
+        issb,
+        Uindex,
+        sed_tables,
         redshift
     )
-    
-    # Execute the worker function in parallel (pmap replaces pool.map)
-    L_nu_over_nu_chunks = pmap(Worker_partial, index_chunks) 
-    
-    # Concatenate the results (np.concatenate -> vcat)
-    # The result is a Matrix{Float64} of dimensionless L_nu/nu values
-    concatenated_worker_output = vcat(L_nu_over_nu_chunks...) 
 
-    # 4. Luminosity Calculation (Lnu)
-
-    # L_sun_W = 3.828e26 * u.W 
-    L_sun_W = 3.828e26 * u"W" 
+    # 4. Luminosity Calculation (Lnu, in W/Hz as plain Float64)
+    L_sun_W = 3.828e26
 
     # Reshape LIR to a column vector (replaces np.array(LIR)[:, np.newaxis])
     LIR_col = reshape(LIR, N_total, 1) 
     
-    # Lnu calculation in W/Hz (Julia units are applied directly)
-    Lnu = L_sun_W .* LIR_col .* concatenated_worker_output ./ u"Hz"
+    # concatenated_worker_output encodes the 1/Hz term numerically.
+    Lnu = L_sun_W .* LIR_col .* concatenated_worker_output
 
     # 5. Flux Density Calculation (Snu_arr)
 
@@ -181,16 +142,12 @@ function gen_Snu_arr(lambda_list, sed_tables, redshift, LIR, Umean, Dlum, issb)
     redshift_col = reshape(redshift, N_total, 1)
     Numerator = Lnu .* (1.0 .+ redshift_col) .* (1.0 / (pi * 4.0))
 
-    # Denominator: ((np.asarray(Dlum) * u.Mpc).to(u.m)) ** 2
-    # Dlum is assumed to be a vector of Quantity{Float64, L, ...} (e.g., Mpc units)
-    
-    # Convert Dlum to meters (using .|> u"m") and square it (using .^ 2)
-    Dlum_m_squared = (Dlum .|> u"m") .^ 2
+    # Dlum is expected in meters as plain Float64.
+    Dlum_m_squared = Dlum .^ 2
     Denominator = reshape(Dlum_m_squared, N_total, 1) # Reshape for division broadcasting
 
-    # Final Flux Density Calculation
-    # Snu_arr = ( Numerator / Denominator ).to(u.Jy)
-    Snu_arr = (Numerator ./ Denominator) .|> u"Jy" # Element-wise division and conversion to Jansky
+    # Final Flux Density Calculation in Jy (1 Jy = 1e-26 W m^-2 Hz^-1).
+    Snu_arr = (Numerator ./ Denominator) .* 1.0e26
 
     return Snu_arr
 end
