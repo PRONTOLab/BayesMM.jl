@@ -103,3 +103,5 @@ Check:
 
 - This repo currently contains several MWE scripts (`mwe_*.jl`) used for Reactant debugging.
 - Keep helper scripts focused; most orchestration should stay in `gen_pysides_from_original.jl`.
+
+TODO: Instructions on how to setup and run the repo
