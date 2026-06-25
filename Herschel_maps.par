@@ -1,0 +1,31 @@
+###### Map making parameters ####
+
+sides_cat_path = "/data/SIDES/PYSIDES_ORIGINAL_OUTPUTS/pySIDES_from_original.fits"
+
+filter_list = 	 ['PACS100','PACS160','SPIRE250','SPIRE350','SPIRE500'] #list the filter to use (keep the [] even for a single filter)
+
+beam_fwhm_list = [7.7, 12.0, 18.2, 24.9, 36.3] 				#list of beam FWHM in arcsec in the same order
+
+pixel_size = [1.2, 2.4, 6., 8.3333, 12.] 				#size of the pixels in the map in arcsec
+
+#used only if catalogue does not contains sky coordinates to create a square field
+field_size = 1.9599999999999997 #deg2 
+
+#################################
+
+
+###### Output parameters ########
+
+run_name = 'pySIDES_from_original_Herschel'
+
+output_path = '/data/SIDES/PYSIDES_ORIGINAL_OUTPUTS/MAPS/'
+
+#choose the type of map to generate (beam-smoothed or not and the unit); you can select several type of maps at the same times!
+
+gen_map_nobeam_Jy_pix      = True
+gen_map_nobeam_MJy_sr      = True
+gen_map_smoothed_Jy_beam   = True
+gen_map_smoothed_MJy_sr    = True
+
+################################
+
