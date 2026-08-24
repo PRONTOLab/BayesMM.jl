@@ -1,6 +1,6 @@
-# GalaxyGlasses.jl
+# mmgal.jl
 
-GalaxyGlasses.jl implements the numerical forward model used to generate
+mmgal.jl implements the numerical forward model used to generate
 SIDES-style millimeter-source catalogs. Given galaxy properties, model
 parameters, and explicit random draws, it computes:
 
