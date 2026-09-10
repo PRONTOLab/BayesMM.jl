@@ -121,7 +121,7 @@ function run_all_benchmarks(options, args=ARGS)
 
     results = Dict{String,Dict{String,Float64}}()
     try
-        measurement = run_bayesmmfwd_benchmark!(
+        measurement = run_skymatch_benchmark!(
             results,
             backend;
             dataset=options.dataset,
@@ -132,7 +132,7 @@ function run_all_benchmarks(options, args=ARGS)
         n_gal = measurement.n_gal
         metadata["source_count"] = n_gal
         mode = options.filters ? "forward_filters" : "forward"
-        prefix = "bayesmmfwd_$(mode)_$n_gal"
+        prefix = "skymatch_$(mode)_$n_gal"
         save_results(results, options.results_dir, prefix, backend)
         if !isnothing(measurement.overheads)
             save_overhead_results(
@@ -154,7 +154,7 @@ function run_all_benchmarks(options, args=ARGS)
         metadata["status"] = "complete"
         metadata["completed_at_utc"] = string(Dates.now(UTC))
         save_benchmark_metadata(options.results_dir, metadata)
-        pretty_print_results(results, "BayesMMfwd", backend)
+        pretty_print_results(results, "SkyMatch", backend)
         return results
     catch exception
         status = benchmark_failure_status(exception)
@@ -166,8 +166,8 @@ function run_all_benchmarks(options, args=ARGS)
 
         if source_count > 0
             mode = options.filters ? "forward_filters" : "forward"
-            prefix = "bayesmmfwd_$(mode)_$source_count"
-            benchmark_name = "BayesMMfwd [$source_count galaxies]/$mode"
+            prefix = "skymatch_$(mode)_$source_count"
+            benchmark_name = "SkyMatch [$source_count galaxies]/$mode"
             save_failed_correctness(
                 options.results_dir,
                 prefix,

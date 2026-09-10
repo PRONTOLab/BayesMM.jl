@@ -89,24 +89,29 @@ function parse_options(args)
     return options
 end
 
+const LEGACY_METRIC_PREFIXES = ("bayesmmfwd_forward_", "bayesmm_forward_")
+
 function metric_path(results_dir, source_count, backend, suffix)
     canonical = joinpath(
         results_dir,
-        "bayesmmfwd_forward_$(source_count)_$(backend)$(suffix)",
+        "skymatch_forward_$(source_count)_$(backend)$(suffix)",
     )
-    legacy = joinpath(
-        results_dir,
-        "bayesmm_forward_$(source_count)_$(backend)$(suffix)",
-    )
+    legacy = [
+        joinpath(
+            results_dir,
+            "$(prefix)$(source_count)_$(backend)$(suffix)",
+        ) for prefix in LEGACY_METRIC_PREFIXES
+    ]
+    filter!(isfile, legacy)
     if isfile(canonical)
-        isfile(legacy) && @warn(
-            "Both current and legacy benchmark files exist; using BayesMMfwd",
+        isempty(legacy) || @warn(
+            "Both current and legacy benchmark files exist; using SkyMatch",
             canonical,
             legacy,
         )
         return canonical
     end
-    return isfile(legacy) ? legacy : nothing
+    return isempty(legacy) ? nothing : first(legacy)
 end
 
 function read_metric(results_dir, source_count, backend, suffix)
@@ -661,7 +666,7 @@ function require_figure3_rows(rows)
             )
                 row[key] isa Number && row[key] > 0 || error(
                     "Figure 3 requires $key in " *
-                    "bayesmmfwd_forward_1000000_" *
+                    "skymatch_forward_1000000_" *
                     (hardware_label == CPU_LABEL ? "CPU" : "CUDA") *
                     "benchmarks_overheads.json",
                 )
@@ -1298,7 +1303,7 @@ function write_handoff(
     ]
 
     open(path, "w") do io
-        println(io, "# BayesMMfwd.jl benchmark handoff")
+        println(io, "# SkyMatch.jl benchmark handoff")
         println(io)
         println(
             io,

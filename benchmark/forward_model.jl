@@ -1,4 +1,4 @@
-using BayesMMfwd: BayesMMfwd
+using SkyMatch: SkyMatch
 using Reactant: Reactant
 
 include("common.jl")
@@ -124,7 +124,7 @@ function measure_reactant_overheads(fn, cpu_args)
     return ra_args, host_output, overheads
 end
 
-function run_bayesmmfwd_benchmark!(
+function run_skymatch_benchmark!(
     results::Dict,
     backend::String;
     dataset="data/SIDES_Bethermin2017_short2.csv",
@@ -132,23 +132,23 @@ function run_bayesmmfwd_benchmark!(
     nrows=nothing,
     filters=false,
 )
-    params = BayesMMfwd.load_par_file(param_path)
-    catalog = BayesMMfwd.load_sides_csv(dataset, nrows)
-    inputs = BayesMMfwd.build_forward_inputs(catalog)
-    parameter_data = BayesMMfwd.build_forward_parameters(params; filters)
-    noise = BayesMMfwd.make_simulation_noise(length(inputs.redshift))
+    params = SkyMatch.load_par_file(param_path)
+    catalog = SkyMatch.load_sides_csv(dataset, nrows)
+    inputs = SkyMatch.build_forward_inputs(catalog)
+    parameter_data = SkyMatch.build_forward_parameters(params; filters)
+    noise = SkyMatch.make_simulation_noise(length(inputs.redshift))
 
     cpu_args = (inputs, parameter_data.numeric, noise)
 
     n_gal = length(inputs.redshift)
     mode = filters ? "forward_filters" : "forward"
-    benchmark_name = "BayesMMfwd [$n_gal galaxies]/$mode"
+    benchmark_name = "SkyMatch [$n_gal galaxies]/$mode"
 
     overheads = nothing
     overhead_host_output = nothing
     if n_gal == 1_000_000
         ra_args, overhead_host_output, overheads =
-            measure_reactant_overheads(BayesMMfwd.forward_model, cpu_args)
+            measure_reactant_overheads(SkyMatch.forward_model, cpu_args)
     else
         ra_args = Reactant.to_rarray(cpu_args)
         Reactant.synchronize(ra_args)
@@ -158,12 +158,12 @@ function run_bayesmmfwd_benchmark!(
         results,
         backend,
         benchmark_name,
-        BayesMMfwd.forward_model,
+        SkyMatch.forward_model,
         cpu_args,
         ra_args;
         configs=[BenchmarkConfiguration("Default")],
     )
-    reference = BayesMMfwd.forward_model(cpu_args...)
+    reference = SkyMatch.forward_model(cpu_args...)
     candidate = if isnothing(overhead_host_output)
         materialized = materialize_output(reactant_output)
         force_host_completion(materialized)

@@ -1,6 +1,6 @@
-# mmgal.jl
+# SkyMatch.jl
 
-mmgal.jl implements the numerical forward model used to generate
+SkyMatch.jl implements the numerical forward model used to generate
 SIDES-style millimeter-source catalogs. Given galaxy properties, model
 parameters, and explicit random draws, it computes:
 
@@ -9,7 +9,7 @@ parameters, and explicit random draws, it computes:
 - dust SED quantities, monochromatic fluxes, and optional filter fluxes;
 - CO, [CII], and [CI] line luminosities and fluxes.
 
-The core entry point is `BayesMMfwd.forward_model(inputs, params, noise)`. It is
+The core entry point is `SkyMatch.forward_model(inputs, params, noise)`. It is
 pure numerical Julia: file loading, random-number generation, backend
 selection, compilation, and catalog output remain outside the function. The
 same forward-model source therefore runs as ordinary Julia or compiles with
@@ -17,7 +17,7 @@ Reactant for CPU, NVIDIA GPU, and TPU execution.
 
 ## Setup
 
-BayesMMfwd currently targets Julia 1.11. From the repository root:
+SkyMatch currently targets Julia 1.11. From the repository root:
 
 ```bash
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
@@ -38,21 +38,21 @@ enabled.
 ## Forward-model API
 
 ```julia
-using BayesMMfwd
+using SkyMatch
 
-configuration = BayesMMfwd.load_par_file("data/SIDES_from_original.par")
-catalog = BayesMMfwd.load_sides_csv("data/SIDES_Bethermin2017_short2.csv")
+configuration = SkyMatch.load_par_file("data/SIDES_from_original.par")
+catalog = SkyMatch.load_sides_csv("data/SIDES_Bethermin2017_short2.csv")
 
-inputs = BayesMMfwd.build_forward_inputs(catalog)
-parameters = BayesMMfwd.build_forward_parameters(configuration; filters=false)
-noise = BayesMMfwd.make_simulation_noise(length(inputs.redshift))
+inputs = SkyMatch.build_forward_inputs(catalog)
+parameters = SkyMatch.build_forward_parameters(configuration; filters=false)
+noise = SkyMatch.make_simulation_noise(length(inputs.redshift))
 
-output = BayesMMfwd.forward_model(inputs, parameters.numeric, noise)
+output = SkyMatch.forward_model(inputs, parameters.numeric, noise)
 ```
 
 The explicit `noise` argument makes a run reproducible and lets all backends
 consume identical random draws. The result is a named tuple of arrays; use
-`BayesMMfwd.add_output_columns!` to attach those arrays to a catalog.
+`SkyMatch.add_output_columns!` to attach those arrays to a catalog.
 
 The Reactant path changes data placement and compilation, not the model:
 
@@ -63,7 +63,7 @@ reactant_inputs = Reactant.to_rarray(inputs)
 reactant_parameters = Reactant.to_rarray(parameters.numeric)
 reactant_noise = Reactant.to_rarray(noise)
 
-compiled_forward = Reactant.@compile sync=true BayesMMfwd.forward_model(
+compiled_forward = Reactant.@compile sync=true SkyMatch.forward_model(
     reactant_inputs,
     reactant_parameters,
     reactant_noise,
@@ -99,7 +99,7 @@ correctness data.
 
 ### Reproducing the paper figures
 
-Run every command below from the BayesMMfwd.jl repository root. Raw benchmark
+Run every command below from the SkyMatch.jl repository root. Raw benchmark
 JSON is read from benchmark/results/, and generated paper figures, LaTeX table
 fragments, summaries, and handoff notes are written to
 benchmark/plots/generated/. Figure 1 is the implementation architecture
@@ -123,7 +123,7 @@ julia --startup-file=no --history-file=no --project=benchmark \
 
 Paper item | Generated artifact | Description
 ---|---|---
-Figure 1 | Not generated (LaTeX/TikZ) | BayesMMfwd implementation architecture
+Figure 1 | Not generated (LaTeX/TikZ) | SkyMatch implementation architecture
 Figure 2 | benchmark/plots/generated/fig2_runtime_speedup.pdf | Warm runtime and speedup
 Figure 3 | benchmark/plots/generated/fig3_overheads_amortization.pdf | Measured overheads and derived amortization
 Figure 4 | benchmark/plots/generated/fig4_memory_scaling.pdf | GPU peak memory and host allocation traffic

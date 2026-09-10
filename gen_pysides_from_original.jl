@@ -1,4 +1,4 @@
-import BayesMMfwd
+import SkyMatch
 import Reactant
 using Printf: @sprintf
 
@@ -34,7 +34,7 @@ function run_reactant_forward_model(inputs, params, noise)
     host_to_device = seconds_since(transfer_start)
 
     compile_start = time_ns()
-    compiled_forward = Reactant.@compile sync=true BayesMMfwd.forward_model(
+    compiled_forward = Reactant.@compile sync=true SkyMatch.forward_model(
         inputs_reactant,
         params_reactant,
         noise_reactant,
@@ -136,11 +136,11 @@ function run_reactant_pipeline(;
 )
     backend_group = configure_backend(backend)
     devices = join(string.(Reactant.devices()), ", ")
-    params = BayesMMfwd.load_par_file(param_path)
-    catalog_template = BayesMMfwd.load_sides_csv(dataset, nrows)
-    inputs = BayesMMfwd.build_forward_inputs(catalog_template)
-    parameter_data = BayesMMfwd.build_forward_parameters(params; filters)
-    noise = BayesMMfwd.make_simulation_noise(length(inputs.redshift))
+    params = SkyMatch.load_par_file(param_path)
+    catalog_template = SkyMatch.load_sides_csv(dataset, nrows)
+    inputs = SkyMatch.build_forward_inputs(catalog_template)
+    parameter_data = SkyMatch.build_forward_parameters(params; filters)
+    noise = SkyMatch.make_simulation_noise(length(inputs.redshift))
 
     n_gal = length(inputs.redshift)
     println(
@@ -160,14 +160,14 @@ function run_reactant_pipeline(;
     println("  device-to-host: ", @sprintf("%.6f s", timings.device_to_host))
     println("  total:          ", @sprintf("%.6f s", timings.total))
 
-    output_catalog = BayesMMfwd.add_output_columns!(
+    output_catalog = SkyMatch.add_output_columns!(
         copy(catalog_template),
         reactant_run.output,
         parameter_data.numeric.dust.lambda_list,
         parameter_data.filter_names,
     )
     if write_output
-        BayesMMfwd.gen_outputs(output_catalog, params)
+        SkyMatch.gen_outputs(output_catalog, params)
     end
 
     return (; output_catalog, reactant_run, params)

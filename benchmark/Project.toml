@@ -1,5 +1,5 @@
 [deps]
-BayesMMfwd = "8ccedbea-2053-47fc-b420-270a4dfa0289"
+SkyMatch = "8ccedbea-2053-47fc-b420-270a4dfa0289"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
 Chairmarks = "0ca39b1e-fe0b-4e98-acfc-b1656634c4de"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -11,4 +11,4 @@ Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Reactant = "3c362404-f566-11ee-1572-e11a4b42c853"
 
 [sources]
-BayesMMfwd = {path = ".."}
+SkyMatch = {path = ".."}

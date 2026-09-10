@@ -1,4 +1,4 @@
-module BayesMMfwd
+module SkyMatch
 
 using Reactant
 

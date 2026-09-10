@@ -1,4 +1,4 @@
-name = "GalaxyGlasses"
+name = "SkyMatch"
 uuid = "8ccedbea-2053-47fc-b420-270a4dfa0289"
 authors = ["Vimarsh Sathia <vsathia2@illinois.edu>", "Siyuan Brant Qian <sbrantq4@illinois.edu>", "Kedar Phadke <kphadke2@illinois.edu>", "William Moses <wsmoses@illinois.edu>"]
 version = "0.1.0"
